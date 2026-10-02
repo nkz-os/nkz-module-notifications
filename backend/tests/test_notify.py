@@ -25,7 +25,7 @@ def test_notify_returns_204_without_processing_sync():
                 r = c.post(
                     "/api/notifications/internal/notify",
                     json={"data": [{"id": "urn:ngsi-ld:Alert:x", "type": "Alert"}]},
-                    headers={"NGSILD-Tenant": "montiko"},
+                    headers={"NGSILD-Tenant": "test-tenant"},
                 )
                 assert r.status_code == 204
         finally:
@@ -42,7 +42,7 @@ def test_notify_ignores_non_alert_entities():
                 r = c.post(
                     "/api/notifications/internal/notify",
                     json={"data": [{"id": "urn:ngsi-ld:AgriParcel:p1", "type": "AgriParcel"}]},
-                    headers={"NGSILD-Tenant": "montiko"},
+                    headers={"NGSILD-Tenant": "test-tenant"},
                 )
                 assert r.status_code == 204
         finally:

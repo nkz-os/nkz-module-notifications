@@ -9,7 +9,8 @@ import pytest
 POSTGRES_URL = os.getenv("POSTGRES_URL")
 
 pytestmark = pytest.mark.skipif(
-    not POSTGRES_URL, reason="POSTGRES_URL not set (no DB in unit env)"
+    not POSTGRES_URL or "dummy" in POSTGRES_URL, 
+    reason="POSTGRES_URL not set or dummy (no DB in unit env)"
 )
 
 

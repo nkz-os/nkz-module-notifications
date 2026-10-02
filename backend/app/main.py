@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_settings
+from app.config import get_settings, require_postgres_url
 from app.api import router as api_router
 from app.api.internal import router as internal_router
 
@@ -25,6 +25,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan: reconciliador de suscripciones + digest sender."""
     settings = get_settings()
     logger.info("%s v%s starting — prefix=%s", settings.app_name, settings.app_version, settings.api_prefix)
+    
+    # Fail-fast validations
+    require_postgres_url()
+    if not settings.internal_service_secret:
+        logger.critical("CRITICAL: INTERNAL_SERVICE_SECRET is empty. Callbacks will fail with 401.")
 
     from app.digest.sender import run_digest_sender
     from app.services.subscriptions import run_subscription_reconciler

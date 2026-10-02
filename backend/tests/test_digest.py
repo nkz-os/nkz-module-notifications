@@ -22,7 +22,7 @@ def test_send_digest_once_sends_and_marks(monkeypatch):
     conn.cursor.return_value.__enter__.return_value = cur
     # 1ª query: tenants con ítems; 2ª: ítems; 3ª: UPDATE sent
     cur.fetchall.side_effect = [
-        [{"tenant_id": "montiko"}],
+        [{"tenant_id": "test-tenant"}],
         [
             {"alert_type": "rust_yellow", "alert_name": "Roya", "severity": "high", "parcel_name": "F1"},
         ],
@@ -46,7 +46,7 @@ def test_send_digest_once_skips_when_send_fails(monkeypatch):
     cur = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cur
     cur.fetchall.side_effect = [
-        [{"tenant_id": "montiko"}],
+        [{"tenant_id": "test-tenant"}],
         [{"alert_type": "x", "alert_name": "", "severity": "low", "parcel_name": ""}],
     ]
     monkeypatch.setattr("app.digest.sender.get_conn", lambda: conn)

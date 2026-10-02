@@ -120,7 +120,7 @@ class NotificationDispatcher:
                     INSERT INTO notifications.alert_deliveries
                         (alert_id, tenant_id, severity, channel, status, attempts, last_error)
                     VALUES (%s, %s, %s, %s, %s, 1, %s)
-                    ON CONFLICT (alert_id, channel) DO UPDATE SET
+                    ON CONFLICT (alert_id, tenant_id, channel) DO UPDATE SET
                         severity = EXCLUDED.severity,
                         status = EXCLUDED.status,
                         attempts = notifications.alert_deliveries.attempts + 1,
@@ -129,7 +129,7 @@ class NotificationDispatcher:
                     """,
                     (alert_id, tenant_id, severity, channel, res.status, res.error),
                 )
-            conn.commit()
+                conn.commit()
         except Exception as e:
             logger.warning("record_delivery failed for %s/%s: %s", tenant_id, channel, e)
         finally:

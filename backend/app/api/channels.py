@@ -53,7 +53,11 @@ def put_channels(body: ChannelsIn, tenant_id: str = Depends(get_tenant_id)):
             )
             row = cur.fetchone()
             current = dict(row) if row else {**_DEFAULTS}
-            merged = {k: body.model_dump().get(k) or current[k] for k in _DEFAULTS}
+            merged = {}
+            dumped = body.model_dump()
+            for k in _DEFAULTS:
+                val = dumped.get(k)
+                merged[k] = val if val is not None else current[k]
             cur.execute(
                 """
                 INSERT INTO notifications.tenant_alert_channels

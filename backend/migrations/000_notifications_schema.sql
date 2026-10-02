@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS notifications.alert_deliveries (
     attempts   INT NOT NULL DEFAULT 1,
     last_error TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (alert_id, channel)
+    PRIMARY KEY (alert_id, tenant_id, channel)
 );
 
 -- Cola de digest: avisos acumulados para el email agrupado diario.
