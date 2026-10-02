@@ -73,6 +73,7 @@ def send_digest_once() -> dict:
         message = _build_message(items)
         results = dispatcher.dispatch_digest(tenant_id, "Avisos del día (resumen)", message)
         ok = any(r.get("status") == "sent" for r in results)
+        skipped = all(r.get("status") == "skipped" for r in results)
         tenants += 1
         if ok:
             sent += 1
@@ -87,6 +88,8 @@ def send_digest_once() -> dict:
                 conn.commit()
             finally:
                 conn.close()
+        elif skipped:
+            logger.info("digest skipped for %s (no channels configured)", tenant_id)
         else:
             logger.warning("digest send failed for %s: %s", tenant_id, results)
 
