@@ -1,0 +1,155 @@
+"""NotificationDispatcher — entrega de avisos por los canales configurados.
+
+Un único punto de salida multicanal (email, push, zulip, webhook/n8n, telegram).
+Lee la config del tenant (`notifications.tenant_alert_channels`) y persiste el
+resultado en `notifications.alert_deliveries`. Portado desde risk (PR de
+desacoplaje 2026-10-02).
+"""
+import logging
+
+from app.config import get_settings
+from app.db import get_conn
+from app.dispatcher import adapters
+
+logger = logging.getLogger(__name__)
+
+_SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+class NotificationDispatcher:
+    def __init__(self, settings=None):
+        self.settings = settings or get_settings()
+
+    def dispatch(self, tenant_id: str, alert_type: str, severity: str, payload: dict) -> list[dict]:
+        s = self.settings
+        alert = {
+            **payload,
+            "tenant_id": tenant_id,
+            "alert_type": alert_type,
+            "severity": severity,
+        }
+        channels_cfg = self._get_channels(tenant_id)
+        results = []
+
+        plan = [
+            ("email", adapters.email_adapter, {"email_service_url": s.email_service_url}),
+            ("push", adapters.push_adapter, {"push_service_url": s.push_service_url, "internal_secret": s.internal_service_secret}),
+            ("zulip", adapters.zulip_adapter, {"zulip_service_url": s.zulip_service_url, "internal_secret": s.internal_service_secret}),
+            ("webhook", adapters.webhook_adapter, {}),
+            ("telegram", adapters.telegram_adapter, {}),
+        ]
+        for channel, adapter, kwargs in plan:
+            cfg = channels_cfg.get(channel) or {}
+            if not cfg.get("enabled"):
+                results.append(adapters.DeliveryResult(channel, "skipped"))
+                continue
+            if not self._meets_min_severity(severity, cfg):
+                results.append(adapters.DeliveryResult(channel, "skipped", "below min severity"))
+                continue
+            try:
+                res = adapter(alert, cfg, **kwargs)
+            except Exception as e:
+                res = adapters.DeliveryResult(channel, "failed", str(e))
+            results.append(res)
+            self._record_delivery(tenant_id, payload.get("id"), severity, channel, res)
+
+        return [r.to_dict() for r in results]
+
+    def dispatch_digest(self, tenant_id: str, subject: str, message: str) -> list[dict]:
+        """Envía el digest agrupado (solo canales de texto: email)."""
+        s = self.settings
+        channels_cfg = self._get_channels(tenant_id)
+        results = []
+        cfg = channels_cfg.get("email") or {}
+        to = cfg.get("to") or cfg.get("recipient")
+        if not cfg.get("enabled") or not to:
+            results.append(adapters.DeliveryResult("email", "skipped"))
+            return [r.to_dict() for r in results]
+        try:
+            import requests
+
+            r = requests.post(
+                f"{s.email_service_url}/send/notification",
+                json={
+                    "email": to,
+                    "farmer_name": tenant_id,
+                    "notification_type": "daily_digest",
+                    "message": message,
+                },
+                timeout=15,
+            )
+            res = (
+                adapters.DeliveryResult("email", "sent")
+                if r.status_code == 200
+                else adapters.DeliveryResult("email", "failed", r.text[:200])
+            )
+        except Exception as e:
+            res = adapters.DeliveryResult("email", "failed", str(e))
+        results.append(res)
+        self._record_delivery(tenant_id, None, "", "email", res)
+        return [r.to_dict() for r in results]
+
+    def _meets_min_severity(self, severity: str, cfg: dict) -> bool:
+        min_sev = cfg.get("min_severity")
+        if not min_sev:
+            return True
+        return _SEVERITY_ORDER.get(severity, 0) >= _SEVERITY_ORDER.get(min_sev, 0)
+
+    def _get_channels(self, tenant_id: str) -> dict:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT email, push, zulip, webhook, telegram "
+                    "FROM notifications.tenant_alert_channels WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def _record_delivery(self, tenant_id: str, alert_id: str | None, severity: str, channel: str, res) -> None:
+        if not alert_id:
+            return
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO notifications.alert_deliveries
+                        (alert_id, tenant_id, severity, channel, status, attempts, last_error)
+                    VALUES (%s, %s, %s, %s, %s, 1, %s)
+                    ON CONFLICT (alert_id, channel) DO UPDATE SET
+                        severity = EXCLUDED.severity,
+                        status = EXCLUDED.status,
+                        attempts = notifications.alert_deliveries.attempts + 1,
+                        last_error = EXCLUDED.last_error,
+                        updated_at = now()
+                    """,
+                    (alert_id, tenant_id, severity, channel, res.status, res.error),
+                )
+            conn.commit()
+        except Exception as e:
+            logger.warning("record_delivery failed for %s/%s: %s", tenant_id, channel, e)
+        finally:
+            conn.close()
+
+    def has_delivered(self, alert_id: str, severity: str) -> bool:
+        """True si ya se entregó esta Alert con esta severidad (dedup de reenvíos)."""
+        if not alert_id:
+            return False
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM notifications.alert_deliveries "
+                    "WHERE alert_id = %s AND severity = %s AND status = 'sent' LIMIT 1",
+                    (alert_id, severity),
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            logger.warning("has_delivered check failed for %s: %s", alert_id, e)
+            return False
+        finally:
+            conn.close()
