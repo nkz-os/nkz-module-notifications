@@ -1,0 +1,33 @@
+{
+  "page": {
+    "title": "Notification Channels",
+    "description": "Configure where and how you want to receive notifications and alerts."
+  },
+  "channels": {
+    "email": {
+      "title": "Email",
+      "description": "Receive notifications in your inbox.",
+      "recipients": "Recipients",
+      "recipientsPlaceholder": "example@domain.com, other@domain.com"
+    },
+    "zulip": {
+      "title": "Zulip",
+      "description": "Send notifications to a Zulip stream.",
+      "stream": "Stream",
+      "streamPlaceholder": "alerts",
+      "topic": "Topic",
+      "topicPlaceholder": "notifications"
+    }
+  },
+  "moreComingSoon": "More channels coming soon",
+  "save": "Save changes",
+  "saving": "Saving...",
+  "success": {
+    "saved": "Configuration saved successfully."
+  },
+  "error": {
+    "loadFailed": "Could not load channel configuration.",
+    "saveFailed": "An error occurred while saving changes.",
+    "forbidden": "You do not have permission to modify channels (admins only)."
+  }
+}

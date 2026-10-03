@@ -1,0 +1,33 @@
+{
+  "page": {
+    "title": "Canales de Notificación",
+    "description": "Configura dónde y cómo quieres recibir las notificaciones y alertas."
+  },
+  "channels": {
+    "email": {
+      "title": "Correo Electrónico",
+      "description": "Recibe notificaciones en tu bandeja de entrada.",
+      "recipients": "Destinatarios",
+      "recipientsPlaceholder": "ejemplo@dominio.com, otro@dominio.com"
+    },
+    "zulip": {
+      "title": "Zulip",
+      "description": "Envía notificaciones a un stream de Zulip.",
+      "stream": "Stream",
+      "streamPlaceholder": "alertas",
+      "topic": "Tema (Topic)",
+      "topicPlaceholder": "notificaciones"
+    }
+  },
+  "moreComingSoon": "Más canales próximamente",
+  "save": "Guardar cambios",
+  "saving": "Guardando...",
+  "success": {
+    "saved": "Configuración guardada correctamente."
+  },
+  "error": {
+    "loadFailed": "No se pudo cargar la configuración de los canales.",
+    "saveFailed": "Ocurrió un error al guardar los cambios.",
+    "forbidden": "No tienes permiso para modificar los canales (solo administradores)."
+  }
+}
