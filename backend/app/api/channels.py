@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from psycopg2.extras import Json
 
 from app.db import get_conn
-from app.middleware import get_tenant_id
+from app.middleware import AuthContext, get_tenant_id, require_roles
 
 router = APIRouter()
 
@@ -42,7 +42,11 @@ def get_channels(tenant_id: str = Depends(get_tenant_id)):
 
 
 @router.put("/channels")
-def put_channels(body: ChannelsIn, tenant_id: str = Depends(get_tenant_id)):
+def put_channels(
+    body: ChannelsIn,
+    auth: AuthContext = Depends(require_roles("TenantAdmin", "PlatformAdmin")),
+):
+    tenant_id = auth.tenant_id
     conn = get_conn()
     try:
         with conn.cursor() as cur:
