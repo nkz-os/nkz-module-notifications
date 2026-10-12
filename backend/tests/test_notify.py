@@ -47,3 +47,40 @@ def test_notify_ignores_non_alert_entities():
                 assert r.status_code == 204
         finally:
             app.dependency_overrides.pop(verify_internal_secret, None)
+
+
+def test_notify_auth_accepts_derived_token_and_master_until_contracted(monkeypatch):
+    """The token bound to this tenant and host passes; the master passes only while
+    accepted; a token of another tenant never does."""
+    from nkz_platform_sdk.notify_auth import TOKEN_HEADER, notification_token
+
+    url = "/api/notifications/internal/notify"
+    body = {"data": []}
+    # Starlette's TestClient sends Host: testserver; the token binds to that host.
+    token = notification_token("dummy-secret", "tenant-a", "testserver")
+    monkeypatch.setenv("NKZ_NOTIFY_ACCEPT_MASTER", "false")
+    with TestClient(app) as c:
+        ok = c.post(url, json=body, headers={"NGSILD-Tenant": "tenant-a", TOKEN_HEADER: token})
+        assert ok.status_code == 204
+        other = c.post(url, json=body, headers={"NGSILD-Tenant": "tenant-b", TOKEN_HEADER: token})
+        assert other.status_code == 401
+        master = c.post(url, json=body, headers={
+            "NGSILD-Tenant": "tenant-a", "X-Internal-Service-Secret": "dummy-secret"})
+        assert master.status_code == 401
+        monkeypatch.setenv("NKZ_NOTIFY_ACCEPT_MASTER", "true")
+        master = c.post(url, json=body, headers={
+            "NGSILD-Tenant": "tenant-a", "X-Internal-Service-Secret": "dummy-secret"})
+        assert master.status_code == 204
+
+
+def test_registrar_passes_secret_and_flag(monkeypatch):
+    """The registrar owns the receiver auth header; derived tokens follow the env flag."""
+    from app.services.subscriptions import build_registrar
+
+    monkeypatch.setenv("INTERNAL_SERVICE_SECRET", "dummy-secret")
+    monkeypatch.delenv("NKZ_NOTIFY_DERIVED_TOKENS", raising=False)
+    r = build_registrar()
+    assert r.internal_secret == "dummy-secret" and r.derived_tokens is False
+    assert r.notification_headers == {}
+    monkeypatch.setenv("NKZ_NOTIFY_DERIVED_TOKENS", "true")
+    assert build_registrar().derived_tokens is True

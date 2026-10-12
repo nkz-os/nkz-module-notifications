@@ -2,7 +2,7 @@
 Notifications Backend - Internal Routes
 
 `/internal/notify` es el receptor de notificaciones NGSI-LD de Orion (Alert).
-Autenticado por X-Internal-Service-Secret (inyectado como receiverInfo en la
+Autenticado por token derivado o X-Internal-Service-Secret (receiverInfo de la
 suscripción). Responde 204 al momento y procesa en segundo plano.
 """
 

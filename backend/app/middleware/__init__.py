@@ -8,11 +8,11 @@ routes authenticate via X-Internal-Service-Secret instead.
 
 from __future__ import annotations
 
-import hmac
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from nkz_platform_sdk.auth import AuthContext, require_auth as _sdk_require_auth
+from nkz_platform_sdk.notify_auth import accept_master_from_env, verify_notification
 
 from app.config import Settings, get_settings
 
@@ -50,14 +50,20 @@ def require_roles(*required_roles: str):
 
 
 async def verify_internal_secret(
-    x_internal_service_secret: Optional[str] = Header(None, alias="X-Internal-Service-Secret"),
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> None:
-    """Authenticate /internal/* routes via the shared K8s secret."""
-    expected = settings.internal_service_secret
-    provided = x_internal_service_secret or ""
-    if not expected or not hmac.compare_digest(provided, expected):
+    """Authenticate /internal/* routes.
+
+    Accepts the token bound to this tenant and host (nkz_platform_sdk.notify_auth)
+    and, until NKZ_NOTIFY_ACCEPT_MASTER is false, the shared K8s secret itself.
+    """
+    if not verify_notification(
+        request.headers,
+        secret=settings.internal_service_secret,
+        accept_master=accept_master_from_env(),
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing internal service secret",
+            detail="Invalid or missing notification credentials",
         )
