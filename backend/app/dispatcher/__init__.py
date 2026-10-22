@@ -76,6 +76,7 @@ class NotificationDispatcher:
                     "notification_type": "daily_digest",
                     "message": message,
                 },
+                headers={"X-Internal-Service-Secret": s.internal_service_secret} if s.internal_service_secret else {},
                 timeout=15,
             )
             res = (
