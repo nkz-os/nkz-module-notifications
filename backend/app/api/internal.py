@@ -37,7 +37,7 @@ def _resolve_tenant_for_entity(conn, entity_id: str) -> str | None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT tenant_id FROM tenants "
+                "SELECT DISTINCT tenant_id FROM module_tenant_plan "
                 "WHERE status = 'active' AND tenant_id IS NOT NULL"
             )
             tenants = [r["tenant_id"] for r in cur.fetchall()]
@@ -69,7 +69,7 @@ def _parcel_names() -> dict[str, dict[str, str]]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT tenant_id FROM tenants "
+                "SELECT DISTINCT tenant_id FROM module_tenant_plan "
                 "WHERE status = 'active' AND tenant_id IS NOT NULL"
             )
             tenants = [r["tenant_id"] for r in cur.fetchall()]

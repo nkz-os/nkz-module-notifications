@@ -31,7 +31,7 @@ def active_tenants() -> list[str]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT tenant_id FROM tenants "
+                "SELECT DISTINCT tenant_id FROM module_tenant_plan "
                 "WHERE status = 'active' AND tenant_id IS NOT NULL AND tenant_id <> ''"
             )
             return sorted(r["tenant_id"] for r in cur.fetchall())
