@@ -23,6 +23,16 @@ EXTREME_ALERT_TYPES = {
     "weather_alert",
 }
 
+# Non-weather types that are also delivered immediately (severity gate still applies).
+IMMEDIATE_ALERT_TYPES = {
+    "route_planned",
+}
+
+# Neutral English titles for types that have one; others use the generic title.
+_ALERT_TITLES = {
+    "route_planned": "Route planned",
+}
+
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
@@ -53,11 +63,15 @@ def alert_to_info(entity: dict) -> dict | None:
         severity = "medium"
     entity_id = _unwrap(entity.get("refEntity")) or ""
 
+    description = _unwrap(entity.get("description"))
+    description = str(description).strip() if description else ""
+
     return {
         "id": alert_id,
         "alert_type": str(alert_type),
         "severity": severity,
         "entity_id": str(entity_id) if entity_id else "",
+        "description": description,
     }
 
 
@@ -65,7 +79,7 @@ def _is_immediate(info: dict) -> bool:
     settings = get_settings()
     min_sev = _SEVERITY_ORDER.get(settings.immediate_min_severity, 2)
     return (
-        info["alert_type"] in EXTREME_ALERT_TYPES
+        (info["alert_type"] in EXTREME_ALERT_TYPES or info["alert_type"] in IMMEDIATE_ALERT_TYPES)
         and _SEVERITY_ORDER.get(info["severity"], 0) >= min_sev
     )
 
@@ -111,12 +125,13 @@ def handle_alert(tenant_id: str, entity: dict, alert_name: str = "", parcel_name
             info["severity"],
             {
                 "id": info["id"],
-                "title": f"Notification — {info['alert_type']}",
-                "summary": f"[{info['severity'].upper()}] {info['alert_type']}: {info['entity_id']}",
+                "title": _ALERT_TITLES.get(info["alert_type"], f"Notification — {info['alert_type']}"),
+                "summary": info.get("description")
+                or f"[{info['severity'].upper()}] {info['alert_type']}: {info['entity_id']}",
                 "data": {"alertType": info["alert_type"], "entityId": info["entity_id"]},
             },
         )
         return "immediate"
 
-    _queue_for_digest(tenant_id, info, alert_name, parcel_name)
+    _queue_for_digest(tenant_id, info, alert_name or info.get("description", ""), parcel_name)
     return "queued"
