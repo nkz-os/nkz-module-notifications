@@ -163,6 +163,10 @@ def handle_alert(tenant_id: str, entity: dict, alert_name: str = "", parcel_name
 
     info = alert_to_info(entity)
     if not info:
+        # Resolved/expired/dismissed: release the dedup so a later episode of the
+        # same (stable) alert id notifies again.
+        if isinstance(entity, dict) and entity.get("id") and (_unwrap(entity.get("status")) or "active") != "active":
+            NotificationDispatcher().release_delivery(tenant_id, str(entity["id"]))
         return "skipped"
 
     if _is_immediate(info):
@@ -185,12 +189,13 @@ def handle_alert(tenant_id: str, entity: dict, alert_name: str = "", parcel_name
                     "entityId": info["entity_id"],
                     "parcelId": parcel_id,
                     "plain": None,
-                    "urgency": urgency or "silent",
-                    "action": info.get("action") or {"kind": "none", "params": {}},
+                    **({"urgency": urgency} if urgency else {}),
+                    **({"action": info["action"]} if info.get("action") else {}),
                     "screen": "ParcelDetail" if parcel_id else None,
                     "params": {"parcelId": parcel_id} if parcel_id else {},
                 },
-                "channel_id": urgency or "silent",
+                # Legacy alerts (no valid plain): no channel, exactly as before.
+                **({"channel_id": urgency} if urgency else {}),
                 "plain_all": info.get("plain"),
             },
         )

@@ -99,8 +99,8 @@ def test_handle_alert_legacy_frost_payload(monkeypatch):
     assert handle_alert("acmefarm", _alert("frost", "critical", plain=False, urgency=None, action=False)) == "immediate"
     p = disp.dispatch.call_args.args[3]
     assert p["title"] == "Notification — frost" and p["plain_all"] is None
-    assert p["channel_id"] == "silent" and p["data"]["urgency"] == "silent"
-    assert p["data"]["action"] == {"kind": "none", "params": {}}
+    assert "channel_id" not in p
+    assert "urgency" not in p["data"] and "action" not in p["data"]
 
 
 def test_producer_without_plain_is_queued_never_vibrate(monkeypatch):
@@ -144,9 +144,73 @@ def test_dispatch_language_eu(monkeypatch):
     assert seen["data"]["plain"] == PLAIN["eu"]
 
 
-def test_dispatch_invalid_lang_falls_back_to_es(monkeypatch):
+def test_dispatch_invalid_lang_falls_back_to_default_lang(monkeypatch):
     seen = _dispatch(monkeypatch, {"enabled": True, "lang": "fr"})
     assert seen["title"] == "Riega hoy" and seen["data"]["plain"] == PLAIN["es"]
+
+
+def test_dispatch_invalid_lang_uses_settings_default(monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "default_lang", "en")
+    seen = _dispatch(monkeypatch, {"enabled": True, "lang": "fr"})
+    assert seen["title"] == "Irrigate today"
+
+
+def test_legacy_alert_push_has_no_channel_or_urgency(monkeypatch):
+    from app.dispatcher.adapters import DeliveryResult
+    seen = {}
+
+    def fake_post(url, json=None, **kw):
+        seen.update(json)
+        return MagicMock(status_code=200, text="")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    from app.dispatcher.adapters import push_adapter
+    disp = _capture(monkeypatch)
+    handle_alert("acmefarm", _alert("frost", "critical", plain=False, urgency=None, action=False))
+    payload = disp.dispatch.call_args.args[3]
+    r = push_adapter({k: v for k, v in payload.items() if k != "plain_all"}
+                     | {"tenant_id": "acmefarm"}, {"enabled": True}, push_service_url="http://x", internal_secret="s")
+    assert isinstance(r, DeliveryResult)
+    assert "channelId" not in seen
+    assert "urgency" not in seen.get("data", {})
+    assert seen["title"] == "Notification — frost"
+
+
+def test_dedup_released_on_resolve_and_notifies_again(monkeypatch):
+    sent, delivered = [], set()
+
+    class FakeDisp:
+        def has_delivered(self, aid, sev):
+            return aid in delivered
+
+        def dispatch(self, tenant, atype, sev, payload):
+            delivered.add(payload["id"])
+            sent.append(payload["id"])
+
+        def release_delivery(self, tenant, aid):
+            delivered.discard(aid)
+
+    monkeypatch.setattr("app.dispatcher.NotificationDispatcher", FakeDisp)
+    active = _alert()
+    resolved = _alert()
+    resolved["status"] = {"type": "Property", "value": "resolved"}
+    assert handle_alert("acmefarm", active) == "immediate"
+    assert handle_alert("acmefarm", active) == "skipped"
+    assert handle_alert("acmefarm", resolved) == "skipped"
+    assert not delivered
+    assert handle_alert("acmefarm", active) == "immediate"
+    assert len(sent) == 2
+
+
+def test_release_delivery_sql_is_tenant_scoped(monkeypatch):
+    conn = MagicMock()
+    monkeypatch.setattr("app.dispatcher.get_conn", lambda: conn)
+    NotificationDispatcher().release_delivery("acmefarm", "urn:x")
+    sql, params = conn.cursor.return_value.__enter__.return_value.execute.call_args.args
+    assert "DELETE FROM notifications.alert_deliveries" in sql and "tenant_id" in sql
+    assert params == ("urn:x", "acmefarm")
+    conn.commit.assert_called_once()
 
 
 def test_dispatch_missing_lang_uses_default(monkeypatch):
@@ -199,10 +263,10 @@ def test_vibrate_without_plain_is_queued_and_silent(monkeypatch):
     disp.dispatch.assert_not_called()
 
 
-def test_vibrate_without_plain_extreme_goes_silent_channel(monkeypatch):
+def test_vibrate_without_plain_extreme_keeps_legacy_no_channel(monkeypatch):
     disp = _capture(monkeypatch)
     assert handle_alert("acmefarm", _alert("frost", "high", plain=False)) == "immediate"
-    assert disp.dispatch.call_args.args[3]["channel_id"] == "silent"
+    assert "channel_id" not in disp.dispatch.call_args.args[3]
 
 
 def test_non_push_adapters_get_no_internal_fields(monkeypatch):

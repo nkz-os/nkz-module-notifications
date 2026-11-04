@@ -36,7 +36,7 @@ class NotificationDispatcher:
         if plain_all:
             lang = (channels_cfg.get("push") or {}).get("lang") or s.default_lang
             if lang not in SUPPORTED_LANGS:
-                lang = "es"
+                lang = s.default_lang
             chosen = pick_lang(plain_all, lang)
             if chosen:
                 alert["title"] = chosen["title"]
@@ -148,6 +148,23 @@ class NotificationDispatcher:
                 conn.commit()
         except Exception as e:
             logger.warning("record_delivery failed for %s/%s: %s", tenant_id, channel, e)
+        finally:
+            conn.close()
+
+    def release_delivery(self, tenant_id: str, alert_id: str) -> None:
+        """Drop the dedup rows of an Alert that is no longer active."""
+        if not alert_id:
+            return
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM notifications.alert_deliveries WHERE alert_id = %s AND tenant_id = %s",
+                    (alert_id, tenant_id),
+                )
+            conn.commit()
+        except Exception as e:
+            logger.warning("release_delivery failed for %s/%s: %s", tenant_id, alert_id, e)
         finally:
             conn.close()
 
