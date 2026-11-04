@@ -1,9 +1,10 @@
 """Config multicanal por tenant (esquema notifications.tenant_alert_channels)."""
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from psycopg2.extras import Json
 
 from app.db import get_conn
+from app.dispatcher.router import SUPPORTED_LANGS
 from app.middleware import AuthContext, get_tenant_id, require_roles
 
 router = APIRouter()
@@ -23,6 +24,13 @@ class ChannelsIn(BaseModel):
     zulip: dict | None = None
     webhook: dict | None = None
     telegram: dict | None = None
+
+    @field_validator("push")
+    @classmethod
+    def _push_lang(cls, v):
+        if v is not None and "lang" in v and v["lang"] not in SUPPORTED_LANGS:
+            raise ValueError("push.lang must be one of es, eu, en")
+        return v
 
 
 @router.get("/channels")

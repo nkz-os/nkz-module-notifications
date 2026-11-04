@@ -59,14 +59,17 @@ def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secr
     if not config.get("enabled"):
         return DeliveryResult("push", "skipped")
     try:
+        body = {
+            "tenant_id": alert.get("tenant_id"),
+            "title": alert.get("title", "Risk Alert"),
+            "body": alert.get("summary", ""),
+            "data": alert.get("data", {}),
+        }
+        if alert.get("channel_id"):
+            body["channelId"] = alert["channel_id"]
         r = requests.post(
             f"{push_service_url}/send/push",
-            json={
-                "tenant_id": alert.get("tenant_id"),
-                "title": alert.get("title", "Risk Alert"),
-                "body": alert.get("summary", ""),
-                "data": alert.get("data", {}),
-            },
+            json=body,
             headers={"X-Internal-Secret": internal_secret},
             timeout=10,
         )

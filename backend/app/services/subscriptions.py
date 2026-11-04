@@ -18,7 +18,8 @@ from app.db import get_conn
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "notifications"
-ALERT_THROTTLING = 15
+# None: no throttling (bursts of per-parcel upserts must not be dropped).
+ALERT_THROTTLING = None
 
 
 def active_tenants() -> list[str]:
