@@ -10,7 +10,7 @@ import logging
 from app.config import get_settings
 from app.db import get_conn
 from app.dispatcher import adapters
-from app.dispatcher.router import pick_lang
+from app.dispatcher.router import SUPPORTED_LANGS, pick_lang
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +35,16 @@ class NotificationDispatcher:
         plain_all = alert.get("plain_all")
         if plain_all:
             lang = (channels_cfg.get("push") or {}).get("lang") or s.default_lang
-            if lang not in ("es", "eu", "en"):
+            if lang not in SUPPORTED_LANGS:
                 lang = "es"
             chosen = pick_lang(plain_all, lang)
             if chosen:
                 alert["title"] = chosen["title"]
                 alert["summary"] = chosen["body"]
                 alert["data"] = {**(alert.get("data") or {}), "plain": chosen}
+
+        push_alert = alert
+        alert = {k: v for k, v in alert.items() if k not in ("channel_id", "plain_all")}
 
         plan = [
             ("email", adapters.email_adapter, {"email_service_url": s.email_service_url, "internal_secret": s.internal_service_secret}),
@@ -59,7 +62,7 @@ class NotificationDispatcher:
                 results.append(adapters.DeliveryResult(channel, "skipped", "below min severity"))
                 continue
             try:
-                res = adapter(alert, cfg, **kwargs)
+                res = adapter(push_alert if channel == "push" else alert, cfg, **kwargs)
             except Exception as e:
                 res = adapters.DeliveryResult(channel, "failed", str(e))
             results.append(res)

@@ -182,3 +182,48 @@ def test_push_adapter_sends_channel_id(monkeypatch):
     sent.clear()
     push_adapter({"tenant_id": "acmefarm", "title": "t", "summary": "s", "data": {}}, {"enabled": True}, "http://push", "sec")
     assert "channelId" not in sent
+
+
+def test_vibrate_without_plain_is_queued_and_silent(monkeypatch):
+    queued = {}
+    monkeypatch.setattr("app.dispatcher.router._queue_for_digest",
+                        lambda tid, info, alert_name="", parcel_name="": queued.update(info) or True)
+    disp = _capture(monkeypatch)
+    for plain in (None, {"fr": {"title": "a", "body": "b"}}):
+        e = _alert("rust", "low", plain=False)
+        if plain:
+            e["plain"] = {"type": "Property", "value": plain}
+        info = alert_to_info(e)
+        assert info["urgency"] is None
+        assert handle_alert("acmefarm", e) == "queued"
+    disp.dispatch.assert_not_called()
+
+
+def test_vibrate_without_plain_extreme_goes_silent_channel(monkeypatch):
+    disp = _capture(monkeypatch)
+    assert handle_alert("acmefarm", _alert("frost", "high", plain=False)) == "immediate"
+    assert disp.dispatch.call_args.args[3]["channel_id"] == "silent"
+
+
+def test_non_push_adapters_get_no_internal_fields(monkeypatch):
+    from app.dispatcher.adapters import DeliveryResult
+    seen = {}
+
+    def mk(name):
+        def f(alert, config, **kw):
+            seen[name] = dict(alert)
+            return DeliveryResult(name, "sent")
+        return f
+
+    for n in ("email", "push", "zulip", "webhook", "telegram"):
+        monkeypatch.setattr(f"app.dispatcher.adapters.{n}_adapter", mk(n))
+    d = NotificationDispatcher()
+    on = {"enabled": True}
+    monkeypatch.setattr(d, "_get_channels", lambda t: {n: on for n in ("email", "push", "zulip", "webhook", "telegram")})
+    monkeypatch.setattr(d, "_record_delivery", lambda *a, **k: None)
+    d.dispatch("acmefarm", "x", "high", {"id": "x", "title": "T", "summary": "S", "data": {},
+                                         "channel_id": "vibrate", "plain_all": PLAIN})
+    for n in ("email", "zulip", "webhook", "telegram"):
+        assert "channel_id" not in seen[n] and "plain_all" not in seen[n]
+        assert seen[n]["data"]["plain"] == PLAIN["es"]
+    assert seen["push"]["channel_id"] == "vibrate"

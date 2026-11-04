@@ -43,7 +43,7 @@ def _unwrap(value):
     return value
 
 
-_LANGS = ("es", "eu", "en")
+SUPPORTED_LANGS = ("es", "eu", "en")
 _URGENCIES = ("vibrate", "silent")
 _PARCEL_PREFIX = "urn:ngsi-ld:AgriParcel:"
 
@@ -60,7 +60,7 @@ def _clean_plain(value) -> dict | None:
     if not isinstance(value, dict):
         return None
     out = {}
-    for lang in _LANGS:
+    for lang in SUPPORTED_LANGS:
         t = value.get(lang)
         if isinstance(t, dict) and isinstance(t.get("title"), str) and isinstance(t.get("body"), str):
             out[lang] = {"title": t["title"], "body": t["body"]}
@@ -99,7 +99,8 @@ def alert_to_info(entity: dict) -> dict | None:
 
     plain = _clean_plain(_unwrap_obj(entity.get("plain")))
     urgency = _unwrap(entity.get("urgency"))
-    if urgency not in _URGENCIES:
+    if urgency not in _URGENCIES or plain is None:
+        # vibrate requires valid plain texts; without them: legacy behavior.
         urgency = None
     action = _unwrap_obj(entity.get("action"))
     if not (isinstance(action, dict) and isinstance(action.get("kind"), str)):

@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 from psycopg2.extras import Json
 
 from app.db import get_conn
+from app.dispatcher.router import SUPPORTED_LANGS
 from app.middleware import AuthContext, get_tenant_id, require_roles
 
 router = APIRouter()
@@ -27,7 +28,7 @@ class ChannelsIn(BaseModel):
     @field_validator("push")
     @classmethod
     def _push_lang(cls, v):
-        if v is not None and "lang" in v and v["lang"] not in ("es", "eu", "en"):
+        if v is not None and "lang" in v and v["lang"] not in SUPPORTED_LANGS:
             raise ValueError("push.lang must be one of es, eu, en")
         return v
 
