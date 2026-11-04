@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     digest_interval_hours: int = 12
     immediate_min_severity: str = "high"
 
+    # Idioma por defecto de los avisos llanos (es|eu|en).
+    default_lang: str = "es"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

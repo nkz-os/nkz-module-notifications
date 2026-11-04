@@ -10,6 +10,7 @@ import logging
 from app.config import get_settings
 from app.db import get_conn
 from app.dispatcher import adapters
+from app.dispatcher.router import pick_lang
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,17 @@ class NotificationDispatcher:
         }
         channels_cfg = self._get_channels(tenant_id)
         results = []
+
+        plain_all = alert.get("plain_all")
+        if plain_all:
+            lang = (channels_cfg.get("push") or {}).get("lang") or s.default_lang
+            if lang not in ("es", "eu", "en"):
+                lang = "es"
+            chosen = pick_lang(plain_all, lang)
+            if chosen:
+                alert["title"] = chosen["title"]
+                alert["summary"] = chosen["body"]
+                alert["data"] = {**(alert.get("data") or {}), "plain": chosen}
 
         plan = [
             ("email", adapters.email_adapter, {"email_service_url": s.email_service_url, "internal_secret": s.internal_service_secret}),
