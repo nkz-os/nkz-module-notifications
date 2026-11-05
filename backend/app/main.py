@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings, require_postgres_url
 from app.api import router as api_router
 from app.api.internal import router as internal_router
+from app.api.weekly import internal_router as weekly_internal_router
 from app.api.public import router as public_router
 
 logger = logging.getLogger(__name__)
@@ -33,14 +34,16 @@ async def lifespan(app: FastAPI):
         logger.critical("CRITICAL: INTERNAL_SERVICE_SECRET is empty. Callbacks will fail with 401.")
 
     from app.digest.sender import run_digest_sender
+    from app.digest.weekly.schedule import run_weekly_scheduler
     from app.services.subscriptions import run_subscription_reconciler
 
     reconciler_task = asyncio.create_task(run_subscription_reconciler())
     digest_task = asyncio.create_task(run_digest_sender())
+    weekly_task = asyncio.create_task(run_weekly_scheduler())
 
     yield
 
-    for task in (reconciler_task, digest_task):
+    for task in (reconciler_task, digest_task, weekly_task):
         task.cancel()
         try:
             await task
@@ -76,6 +79,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_prefix)
     app.include_router(internal_router, prefix=settings.api_prefix)
+    app.include_router(weekly_internal_router, prefix=settings.api_prefix)
     app.include_router(public_router, prefix=settings.api_prefix)
 
     return app

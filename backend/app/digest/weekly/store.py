@@ -67,6 +67,41 @@ def mark_delivered(tenant_id: str, iso_week: str) -> None:
     )
 
 
+def mark_missed(tenant_id: str, iso_week: str, week_start) -> None:
+    """Record that the week went out to nobody. Keeps the content of a report already saved for that week."""
+    from psycopg2.extras import Json
+
+    _run(
+        """
+        INSERT INTO notifications.weekly_reports (tenant_id, iso_week, week_start, status, content)
+        VALUES (%s, %s, %s, 'missed', %s)
+        ON CONFLICT (tenant_id) DO UPDATE SET
+            delivered_at = CASE WHEN notifications.weekly_reports.iso_week = EXCLUDED.iso_week
+                                THEN notifications.weekly_reports.delivered_at ELSE NULL END,
+            content      = CASE WHEN notifications.weekly_reports.iso_week = EXCLUDED.iso_week
+                                THEN notifications.weekly_reports.content ELSE EXCLUDED.content END,
+            iso_week     = EXCLUDED.iso_week,
+            week_start   = EXCLUDED.week_start,
+            status       = 'missed',
+            updated_at   = now()
+        """,
+        (tenant_id, iso_week, week_start, Json({})),
+    )
+
+
+def has_sent_delivery(tenant_id: str, iso_week: str) -> bool:
+    """True when the report reached at least one recipient on any channel that week."""
+    row = _run(
+        """
+        SELECT 1 FROM notifications.weekly_report_deliveries
+        WHERE tenant_id = %s AND iso_week = %s AND status = 'sent' LIMIT 1
+        """,
+        (tenant_id, iso_week),
+        "one",
+    )
+    return row is not None
+
+
 def claim_delivery(tenant_id: str, iso_week: str, user_id: str, channel: str) -> bool:
     """Atomic: one winner per (tenant, week, user, channel). A failed row is reclaimed."""
     row = _run(

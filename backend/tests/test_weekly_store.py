@@ -179,3 +179,29 @@ def test_no_email_column(store):
         rows = [(r["table_name"], r["column_name"]) for r in cur.fetchall()]
     conn.close()
     assert rows == [("weekly_report_channels", "email")]
+
+
+def test_has_sent_delivery(store):
+    assert store.has_sent_delivery(T, "2026-W46") is False
+    store.claim_delivery(T, "2026-W46", "u1", "email")
+    store.finish_delivery(T, "2026-W46", "u1", "email", "failed")
+    assert store.has_sent_delivery(T, "2026-W46") is False
+    store.claim_delivery(T, "2026-W46", "u2", "email")
+    store.finish_delivery(T, "2026-W46", "u2", "email", "skipped")
+    assert store.has_sent_delivery(T, "2026-W46") is False
+    store.claim_delivery(T, "2026-W46", "u3", "push")
+    store.finish_delivery(T, "2026-W46", "u3", "push", "sent")
+    assert store.has_sent_delivery(T, "2026-W46") is True
+    assert store.has_sent_delivery(T, "2026-W47") is False
+
+
+def test_mark_missed_keeps_same_week_content_and_inserts_otherwise(store):
+    from datetime import date
+
+    store.mark_missed(T, "2026-W46", date(2026, 11, 9))
+    r = store.get_report(T)
+    assert r["status"] == "missed" and r["content"] == {} and r["delivered_at"] is None
+    store.save_report(T, "2026-W46", date(2026, 11, 9), "complete", {"tasks": [1]})
+    store.mark_missed(T, "2026-W46", date(2026, 11, 9))
+    r = store.get_report(T)
+    assert r["status"] == "missed" and r["content"] == {"tasks": [1]}
