@@ -120,7 +120,7 @@ def json_bytes(d):
 
 
 def test_farmer_never_requested(env, report):
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     get = [c for c in env.calls if c[0] == "GET"][0]
     assert get[1] == f"http://users/internal/tenants/{T}/users"
     assert get[2]["params"]["roles"] == "TenantAdmin,TechnicalConsultant"
@@ -129,14 +129,14 @@ def test_farmer_never_requested(env, report):
 
 def test_opted_out_gets_no_email_no_push(env, report):
     env.opted_out = {"u1"}
-    assert deliver.deliver(T, report) is True
+    assert deliver.deliver(T, report, include_zulip=True) is True
     assert [c[2]["json"]["email"] for c in env.posts("/send/report")] == [MAIL["u2"]]
     assert env.posts("/send/push")[0][2]["json"]["user_ids"] == ["u2"]
 
 
 def test_disabled_or_no_email_skipped(env, report):
     env.users = [_user("u1", enabled=False), _user("u2", email=False), _user("u3")]
-    assert deliver.deliver(T, report) is True
+    assert deliver.deliver(T, report, include_zulip=True) is True
     assert env.rows[(T, WEEK, "u1", "email")] == "skipped"
     assert env.rows[(T, WEEK, "u2", "email")] == "skipped"
     assert [c[2]["json"]["email"] for c in env.posts("/send/report")] == [MAIL["u3"]]
@@ -145,18 +145,18 @@ def test_disabled_or_no_email_skipped(env, report):
 
 def test_email_channel_off_no_email(env, report):
     env.channels = {"email": False, "zulip": False}
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     assert env.posts("/send/report") == []
     assert env.posts("/send/push")
 
 
 def test_zulip_off_no_zulip(env, report):
     env.channels = {"email": True, "zulip": False}
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     assert env.posts("/internal/message") == []
     env.channels = {"email": True, "zulip": True}
     env.tenant_cfg = {"zulip": {"enabled": False}}
-    deliver.deliver("tenant-b", report)
+    deliver.deliver("tenant-b", report, include_zulip=True)
     assert env.posts("/internal/message") == []
 
 
@@ -164,28 +164,28 @@ def test_zulip_off_no_zulip(env, report):
 def test_missing_prefs_secret_or_api_url_blocks_email_only(env, report, monkeypatch, caplog, missing):
     set_settings(monkeypatch, **{missing: ""})
     with caplog.at_level(logging.CRITICAL):
-        assert deliver.deliver(T, report) is False
+        assert deliver.deliver(T, report, include_zulip=True) is False
     assert env.posts("/send/report") == []
     assert env.posts("/send/push")
     assert sum(1 for r in caplog.records if r.levelno == logging.CRITICAL) == 1
     assert not [k for k in env.rows if k[3] == "email"]
     # after the config is fixed, email goes out
     set_settings(monkeypatch)
-    assert deliver.deliver(T, report) is True
+    assert deliver.deliver(T, report, include_zulip=True) is True
     assert len(env.posts("/send/report")) == 2
 
 
 def test_recipient_failure_no_email_no_push(env, report):
     env.users_status = 503
-    assert deliver.deliver(T, report) is False
+    assert deliver.deliver(T, report, include_zulip=True) is False
     assert env.posts("/send/report") == [] and env.posts("/send/push") == []
     with pytest.raises(RuntimeError):
         deliver.fetch_recipients(T)
 
 
 def test_claim_prevents_duplicate(env, report):
-    deliver.deliver(T, report)
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
+    deliver.deliver(T, report, include_zulip=True)
     assert len(env.posts("/send/report")) == 2
     assert len(env.posts("/send/push")) == 1
     assert len(env.posts("/internal/message")) == 1
@@ -193,10 +193,10 @@ def test_claim_prevents_duplicate(env, report):
 
 def test_failed_retried_only_that_user(env, report):
     env.email_fail_for = {MAIL["u2"]}
-    assert deliver.deliver(T, report) is False
+    assert deliver.deliver(T, report, include_zulip=True) is False
     assert env.rows[(T, WEEK, "u2", "email")] == "failed"
     env.email_fail_for = set()
-    assert deliver.deliver(T, report) is True
+    assert deliver.deliver(T, report, include_zulip=True) is True
     sent = [c[2]["json"]["email"] for c in env.posts("/send/report")]
     assert sent == [MAIL["u1"], MAIL["u2"], MAIL["u2"]]
 
@@ -209,7 +209,7 @@ def test_only_user_id(env, report):
 
 
 def test_email_payload(env, report):
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     c = env.posts("/send/report")[0]
     assert c[2]["headers"] == {"X-Internal-Service-Secret": "int"}
     b = c[2]["json"]
@@ -222,7 +222,7 @@ def test_email_payload(env, report):
 def test_push_payload(env, report):
     from app.digest.weekly import render
     env.opted_out = {"u2"}
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     c = env.posts("/send/push")[0]
     assert c[2]["headers"] == {"X-Internal-Secret": "int"}
     b = c[2]["json"]
@@ -240,23 +240,25 @@ def test_zulip_stream_rule(env, report):
     assert deliver.zulip_stream("acme", {"stream": "tenant-acme-general"}) == "tenant-acme-general"
     assert deliver.zulip_stream("acme", {"stream": "alerts"}) is None
     assert deliver.zulip_stream("acme", {"stream": "tenant-other-alerts"}) is None
+    for bad in ("tenant-acme-x-alerts", "tenant-acme-", "tenant-acme-custom", "alerts"):
+        assert deliver.zulip_stream("acme", {"stream": bad}) is None
     env.tenant_cfg = {"zulip": {"enabled": True, "stream": "alerts"}}
-    deliver.deliver(T, report)
+    deliver.deliver(T, report, include_zulip=True)
     assert env.posts("/internal/message") == []
     assert env.rows[(T, WEEK, "", "zulip")] == "skipped"
     env.tenant_cfg = {"zulip": {"enabled": True}}
-    deliver.deliver("tenant-b", report)
+    deliver.deliver("tenant-b", report, include_zulip=True)
     z = env.posts("/internal/message")[0][2]["json"]
-    assert z["stream"] == "tenant-tenant-b-alerts" or z["stream"].startswith("tenant-tenant-b-")
+    assert z["stream"] == "tenant-tenant-b-alerts"
     assert z["topic"] == "Informe semanal"
 
 
 def test_no_email_in_logs(env, report, caplog):
     env.email_fail_for = {MAIL["u2"]}
     with caplog.at_level(logging.DEBUG):
-        deliver.deliver(T, report)
+        deliver.deliver(T, report, include_zulip=True)
         env.users_status = 500
-        deliver.deliver(T, report)
+        deliver.deliver(T, report, include_zulip=True)
     text = caplog.text + json.dumps({str(k): v for k, v in env.rows.items()})
     for addr in MAIL.values():
         assert addr not in text
@@ -268,3 +270,44 @@ def test_lang():
     assert deliver.pick_user_lang("ca", "es") == "es"
     assert deliver.pick_user_lang(None, "es") == "es"
     assert deliver.pick_user_lang("ca", "xx") == "es"
+
+
+@pytest.mark.parametrize("bad", ["tenant-acme-x-alerts", "tenant-acme-", "tenant-acme-custom", "alerts"])
+def test_bad_streams_recorded_skipped(env, report, bad):
+    env.tenant_cfg = {"zulip": {"enabled": True, "stream": bad}}
+    assert deliver.deliver("acme", report, include_zulip=True) is True
+    assert env.posts("/internal/message") == []
+    assert env.rows[("acme", WEEK, "", "zulip")] == "skipped"
+
+
+def test_push_store_error_does_not_block_zulip(env, report, monkeypatch):
+    def finish(tenant, week, uid, ch, status, error=None):
+        if ch == "push":
+            raise RuntimeError("db down")
+        env.finish(tenant, week, uid, ch, status, error)
+
+    monkeypatch.setattr(store, "finish_delivery", finish)
+    assert deliver.deliver(T, report, include_zulip=True) is False
+    assert len(env.posts("/internal/message")) == 1
+
+
+def test_zulip_default_off_with_only_user(env, report):
+    deliver.deliver(T, report, only_user_id="u1")
+    assert env.posts("/internal/message") == []
+    deliver.deliver(T, report, only_user_id="u1", include_zulip=True)
+    assert len(env.posts("/internal/message")) == 1
+
+
+def test_failed_push_batch_retried(env, report, monkeypatch):
+    errors = {}
+    monkeypatch.setattr(store, "finish_delivery",
+                        lambda t, w, u, c, st, error=None: (env.finish(t, w, u, c, st, error),
+                                                            errors.__setitem__((u, c), error)))
+    env.fail = {"/send/push": 502}
+    assert deliver.deliver(T, report) is False
+    assert env.rows[(T, WEEK, "u1", "push")] == env.rows[(T, WEEK, "u2", "push")] == "failed"
+    assert errors[("u1", "push")] == "HTTP 502"
+    env.fail = {}
+    env.rows[(T, WEEK, "u2", "push")] = "sent"
+    assert deliver.deliver(T, report) is True
+    assert [c[2]["json"]["user_ids"] for c in env.posts("/send/push")] == [["u1", "u2"], ["u1"]]

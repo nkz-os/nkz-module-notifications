@@ -19,6 +19,7 @@ class DeliveryResult:
         self.channel = channel
         self.status = status  # sent | failed | skipped
         self.error = error
+        self.code: int | None = None  # HTTP status when the failure came from a response
 
     def to_dict(self) -> dict:
         return {"channel": self.channel, "status": self.status, "error": self.error}
@@ -91,7 +92,9 @@ def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secr
         )
         if r.status_code == 200:
             return DeliveryResult("push", "sent")
-        return DeliveryResult("push", "failed", r.text[:200])
+        res = DeliveryResult("push", "failed", r.text[:200])
+        res.code = r.status_code
+        return res
     except Exception as e:
         return DeliveryResult("push", "failed", str(e))
 

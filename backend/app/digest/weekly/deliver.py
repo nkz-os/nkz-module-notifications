@@ -44,9 +44,9 @@ def pick_user_lang(locale, default: str) -> str:
 
 
 def zulip_stream(tenant_id: str, cfg) -> str | None:
-    """Configured stream or the tenant's alerts stream; anything outside the tenant prefix is refused."""
+    """Configured stream or the tenant's alerts stream; only the tenant's own alerts/general streams are allowed."""
     stream = (cfg or {}).get("stream") or f"tenant-{tenant_id}-alerts"
-    return stream if stream.startswith(f"tenant-{tenant_id}-") else None
+    return stream if stream in (f"tenant-{tenant_id}-alerts", f"tenant-{tenant_id}-general") else None
 
 
 def _tenant_cfg(tenant_id: str) -> dict:
@@ -64,7 +64,7 @@ def _scrub(err, email) -> str | None:
     return str(err).replace(email, "***") if email else str(err)
 
 
-def deliver(tenant_id: str, report: dict, *, only_user_id: str | None = None, include_zulip: bool = True) -> bool:
+def deliver(tenant_id: str, report: dict, *, only_user_id: str | None = None, include_zulip: bool = False) -> bool:
     """True when recipients were read and nothing is left unattempted or failed (a failed row is retried later)."""
     s = get_settings()
     week = report["iso_week"]
@@ -123,7 +123,11 @@ def deliver(tenant_id: str, report: dict, *, only_user_id: str | None = None, in
             logger.error("weekly_report: user step failed tenant=%s week=%s user=%s: %s", tenant_id, week, uid, e)
 
     if push_users:
-        ok &= _send_push(s, tenant_id, report, week, push_users, tenant_lang)
+        try:
+            ok &= _send_push(s, tenant_id, report, week, push_users, tenant_lang)
+        except Exception as e:
+            ok = False
+            logger.error("weekly_report: push step failed tenant=%s week=%s: %s", tenant_id, week, e)
     if include_zulip and channels.get("zulip") and _cfg(cfg, "zulip").get("enabled"):
         try:
             ok &= _send_zulip(s, tenant_id, report, week, _cfg(cfg, "zulip"), tenant_lang, app_url)
@@ -165,8 +169,9 @@ def _send_push(s, tenant_id, report, week, user_ids, lang) -> bool:
     except Exception as e:
         res = adapters.DeliveryResult("push", "failed", type(e).__name__)
     status = "sent" if res.status == "sent" else "failed"
+    err = None if status == "sent" else (f"HTTP {res.code}" if res.code else (res.error or "failed")[:40])
     for uid in user_ids:
-        store.finish_delivery(tenant_id, week, uid, "push", status, res.error)
+        store.finish_delivery(tenant_id, week, uid, "push", status, err)
     logger.info("weekly_report: push %s tenant=%s week=%s users=%d", status, tenant_id, week, len(user_ids))
     return status == "sent"
 
@@ -177,7 +182,7 @@ def _send_zulip(s, tenant_id, report, week, zcfg, lang, app_url) -> bool:
     stream = zulip_stream(tenant_id, zcfg)
     if stream is None:
         store.finish_delivery(tenant_id, week, "", "zulip", "skipped", "stream_outside_tenant")
-        logger.error("weekly_report: zulip stream outside tenant prefix, skipped tenant=%s week=%s", tenant_id, week)
+        logger.error("weekly_report: zulip stream not allowed for tenant, skipped tenant=%s week=%s", tenant_id, week)
         return True
     try:
         res = adapters.zulip_adapter(
