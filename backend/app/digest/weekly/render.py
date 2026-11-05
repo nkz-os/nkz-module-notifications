@@ -22,8 +22,14 @@ def subject(report: dict, lang: str) -> str:
     n = len(report["tasks"])
     farm = _line(report.get("farm"))
     sfx = "" if farm else "_nofarm"
-    if report["status"] == "complete":
-        key = ("subj_tasks" if n else "subj_none") + sfx
+    n_alerts = len(report["alerts"]) + report["extra_alerts"]
+    if report["status"] == "complete" and n:
+        key = "subj_tasks" + sfx
+    elif report["status"] == "complete" and n_alerts:
+        c = t(lang, "count_alert_one") if n_alerts == 1 else t(lang, "count_alert_many", n=n_alerts)
+        return _line(t(lang, "subj_alerts" + sfx, count=c, farm=farm))
+    elif report["status"] == "complete":
+        key = "subj_none" + sfx
     else:  # never "nothing urgent" unless every source answered completely
         key = ("subj_partial" if n else "subj_partial_none") + sfx
     return _line(t(lang, key, count=_count(lang, n), farm=farm))
@@ -103,7 +109,13 @@ def _blocks(report, lang, app_url):
         for a in report["alerts"]:
             if a["weather"]:
                 desc = a.get("description") if lang == "es" else ""
-                text = desc + t(lang, "forecast_suffix") if desc else t(lang, "weather_generic")
+                sev = a.get("severity")
+                if desc:
+                    text = desc + t(lang, "forecast_suffix")
+                elif sev in ("severe", "moderate"):
+                    text = t(lang, "weather_sev", sev=t(lang, "sev_" + sev))
+                else:
+                    text = t(lang, "weather_generic")
                 b.append(("item", "", text, "", None))
             else:
                 p = a["plain"].get(lang) or a["plain"].get("es") or next(iter(a["plain"].values()))

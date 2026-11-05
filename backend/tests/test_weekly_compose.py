@@ -73,6 +73,13 @@ def test_status_all_failed():
     assert build(gathered([src(ok=False)]), WS, "w")["status"] == "partial"
 
 
+def test_complete_false_with_data_is_partial_not_all_failed():
+    r = build(gathered([src(ok=False, c=contrib([task("1")], complete=False))], alerts_ok=False), WS, "w")
+    assert r["status"] == "partial"
+    r = build(gathered([src(ok=False, c=contrib([], complete=False)), src("b", ok=False)], alerts_ok=False), WS, "w")
+    assert r["status"] == "partial"
+
+
 def test_task_order():
     ts = [task("undated", {"type": "undated", "date": None}), task("next", d(10)), task("wk-date", d(3)),
           task("wk", {"type": "this_week", "date": None}), task("today", {"type": "today", "date": None}),

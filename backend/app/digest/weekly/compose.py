@@ -53,7 +53,7 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
     failed = [s for s in sources if not s.ok]
     if not sources:
         status = "no_sources"
-    elif len(failed) == len(sources) and not gathered.alerts_ok:
+    elif not any(s.contribution is not None for s in sources) and not gathered.alerts_ok:
         status = "all_failed"
     elif failed or not gathered.alerts_ok:
         status = "partial"

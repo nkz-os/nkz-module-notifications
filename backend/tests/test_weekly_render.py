@@ -95,7 +95,7 @@ def test_weather_alert_copy():
     r = rep([task("1")], weather=w)
     assert "Riesgo de helada el martes (previsión)" in render.email(r, "es", PREFS, APP)["text"]
     en = render.email(r, "en", PREFS, APP)["text"]
-    assert "Weather alert (forecast)" in en and "helada" not in en
+    assert "Severe weather alert (forecast)" in en and "helada" not in en
 
 
 def test_machine_subject_renders_like_parcel():
@@ -230,3 +230,41 @@ def test_all_langs_render_every_status(lang):
         e = render.email(r, lang, PREFS, APP)
         assert e["subject"] and e["text"] and e["content_html"] and e["title"] == e["subject"]
         assert "{" not in e["text"] and "KeyError" not in e["text"]
+
+
+ALERT_PLAIN = {"id": "urn:a", "severity": "high", "plain": {"es": {"title": "Helada", "body": "Martes"}}}
+WEATHER = {"id": "w", "severity": "severe", "description": "", "parcel_names": []}
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("kw", [{"alerts": [ALERT_PLAIN]}, {"weather": [WEATHER]},
+                                {"alerts": [{"id": "x", "plain": None}]}])
+def test_zero_tasks_with_alerts_never_nothing_urgent(lang, kw):
+    none_texts = {"es": "nada urgente", "en": "nothing urgent", "eu": "ez dago ezer premiazkorik"}
+    r = rep([], **kw)
+    e = render.email(r, lang, PREFS, APP)
+    blob = (e["subject"] + e["text"] + render.zulip(r, lang) + str(render.plain(r, lang))).lower()
+    assert none_texts[lang] not in blob and "{" not in e["subject"]
+
+
+def test_subject_alerts_forms():
+    assert render.subject(rep([], alerts=[ALERT_PLAIN]), "es") == "Esta semana: 1 aviso en Finca Acme"
+    assert render.subject(rep([], alerts=[ALERT_PLAIN], weather=[WEATHER]), "es") == "Esta semana: 2 avisos en Finca Acme"
+    assert render.subject(rep([], alerts=[ALERT_PLAIN], name=""), "es") == "Esta semana: 1 aviso"
+    assert render.subject(rep([], alerts=[ALERT_PLAIN]), "en") == "This week: 1 alert at Finca Acme"
+    assert render.subject(rep([], alerts=[ALERT_PLAIN], weather=[WEATHER], name=""), "en") == "This week: 2 alerts"
+    assert "abisu" in render.subject(rep([], alerts=[ALERT_PLAIN]), "eu")
+    assert render.subject(rep([task("1")], alerts=[ALERT_PLAIN]), "es") == "Esta semana: 1 tarea en Finca Acme"
+
+
+@pytest.mark.parametrize("lang,word", [("es", "grave"), ("en", "Severe"), ("eu", "larria")])
+def test_weather_severity_in_plain_words(lang, word):
+    text = render.email(rep([task("1")], weather=[WEATHER]), lang, PREFS, APP)["text"]
+    assert word in text
+    assert "severe" not in text.replace("Severe", "")
+
+
+def test_weather_severity_es_exact_and_moderate():
+    mod = dict(WEATHER, severity="moderate")
+    assert "Aviso meteorológico grave (previsión)" in render.email(rep([task("1")], weather=[WEATHER]), "es", PREFS, APP)["text"]
+    assert "Moderate weather alert (forecast)" in render.email(rep([task("1")], weather=[mod]), "en", PREFS, APP)["text"]
