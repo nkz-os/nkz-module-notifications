@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # Idioma por defecto de los avisos llanos (es|eu|en).
     default_lang: str = "es"
 
+    # Weekly report: dedicated secret for the public preferences token (never HMAC_SECRET).
+    report_prefs_secret: str = ""
+    public_api_url: str = ""
+    public_app_url: str = ""
+    weekly_report_enabled: bool = False
+    weekly_report_default_tz: str = "UTC"
+    tenant_user_api_url: str = "http://tenant-user-api-service:5000"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
