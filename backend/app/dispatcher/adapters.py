@@ -55,6 +55,20 @@ def email_adapter(alert: dict, config: dict, email_service_url: str, internal_se
         return DeliveryResult("email", "failed", str(e))
 
 
+def report_email_adapter(payload: dict, email_service_url: str, internal_secret: str = "") -> DeliveryResult:
+    """Weekly report email: payload = {email, subject, content_html, text, title, list_unsubscribe_url}."""
+    if not payload.get("email"):
+        return DeliveryResult("email", "skipped")
+    headers = {"X-Internal-Service-Secret": internal_secret} if internal_secret else {}
+    try:
+        r = requests.post(f"{email_service_url}/send/report", json=payload, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return DeliveryResult("email", "sent")
+        return DeliveryResult("email", "failed", f"HTTP {r.status_code}")
+    except Exception as e:
+        return DeliveryResult("email", "failed", type(e).__name__)
+
+
 def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secret: str) -> DeliveryResult:
     if not config.get("enabled"):
         return DeliveryResult("push", "skipped")
@@ -67,6 +81,8 @@ def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secr
         }
         if alert.get("channel_id"):
             body["channelId"] = alert["channel_id"]
+        if alert.get("user_ids"):
+            body["user_ids"] = list(alert["user_ids"])
         r = requests.post(
             f"{push_service_url}/send/push",
             json=body,
