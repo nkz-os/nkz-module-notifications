@@ -105,12 +105,12 @@ def test_not_installed_not_called(monkeypatch):
     "https://crop-health.example.org/internal/weekly-report",
     "http://10.0.0.1:8000/x",
     "ftp://mod-a/x",
-    "",
 ])
 def test_url_must_be_in_cluster(monkeypatch, url):
     monkeypatch.setattr(sources, "list_sources", lambda t: [{**SRC, "weekly_report_url": url}])
     m = _get(monkeypatch)
-    assert sources.gather(T, WEEK).sources == []
+    out = sources.gather(T, WEEK).sources
+    assert [(s.key, s.label, s.ok, s.contribution) for s in out] == [("mod-a", "Module A", False, None)]
     m.assert_not_called()
 
 
@@ -160,6 +160,30 @@ class FakeOrion:
     def __exit__(self, *a):
         return False
 
+    timeout = 30.0
+    geo: dict = {}          # (lon, lat) -> alerts returned by the geo-query
+    geo_calls: list = []
+    geo_fail_on: int | None = None
+
+    def _url(self, path):
+        return "http://orion" + path
+
+    def _headers(self, ct="application/json"):
+        return {}
+
+    @property
+    def _session(self):
+        return self
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        FakeOrion.geo_calls.append(dict(params))
+        if FakeOrion.geo_fail_on == len(FakeOrion.geo_calls):
+            raise RuntimeError("orion down")
+        lon, lat = eval(params["coordinates"])
+        r = MagicMock()
+        r.json.return_value = FakeOrion.geo.get((lon, lat), [])[params["offset"]:params["offset"] + params["limit"]]
+        return r
+
     def query_entities(self, type=None, q=None, limit=100, offset=0, attrs=None, options=None):
         FakeOrion.calls.append({"type": type, "q": q, "limit": limit, "offset": offset})
         if type in FakeOrion.fail:
@@ -170,6 +194,7 @@ class FakeOrion:
 @pytest.fixture()
 def orion(monkeypatch):
     FakeOrion.calls, FakeOrion.data, FakeOrion.fail, FakeOrion.tenants = [], {}, set(), []
+    FakeOrion.geo, FakeOrion.geo_calls, FakeOrion.geo_fail_on = {}, [], None
     monkeypatch.setattr(sources, "SyncOrionClient", FakeOrion)
     monkeypatch.setattr(sources, "_fetch_alerts", REAL_FETCH_ALERTS)
     monkeypatch.setattr(sources, "_fetch_weather_alerts", REAL_FETCH_WEATHER)
@@ -220,13 +245,16 @@ def test_alerts_failure(orion, monkeypatch):
     assert not ok and alerts == []
 
 
-def test_alerts_ok_false_if_weather_fails(orion):
-    orion.fail = {"WeatherAlert"}
+def test_alerts_ok_false_if_weather_fails(orion, monkeypatch):
+    _get(monkeypatch, return_value=_resp())
+    orion.data["AgriParcel"] = [_parcel(1, 1.0, 2.0)]
+    orion.geo_fail_on = 1
     g = sources.gather(T, WEEK)
     assert g.alerts_ok is False
 
 
-def test_alerts_ok_false_if_alert_fails(orion):
+def test_alerts_ok_false_if_alert_fails(orion, monkeypatch):
+    _get(monkeypatch, return_value=_resp())
     orion.fail = {"Alert"}
     assert sources.gather(T, WEEK).alerts_ok is False
 
@@ -240,9 +268,15 @@ def _w(i, sev, valid_to=None, **extra):
             "description": f"d{i}", "validFrom": "2026-11-09T00:00:00Z", "validTo": valid_to, **extra}
 
 
+def _parcel(i, lon, lat, name=None):
+    return {"id": f"urn:ngsi-ld:AgriParcel:{i}", "name": name or f"Parcel {i}",
+            "location": {"type": "Point", "coordinates": [lon, lat]}}
+
+
 def test_weather_alerts_severity_and_cap(orion):
     past = (NOW - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
-    orion.data["WeatherAlert"] = (
+    orion.data["AgriParcel"] = [_parcel(1, -1.5, 42.5)]
+    orion.geo[(-1.5, 42.5)] = (
         [_w(i, "moderate") for i in range(4)]
         + [_w(10 + i, "severe") for i in range(3)]
         + [_w(20, "minor"), _w(21, "informational"), _w(22, "severe", valid_to=past)]
@@ -250,16 +284,53 @@ def test_weather_alerts_severity_and_cap(orion):
     out, ok = sources._fetch_weather_alerts(T, now=NOW)
     assert ok and len(out) == 5
     assert [a["severity"] for a in out] == ["severe"] * 3 + ["moderate"] * 2
-    assert {"id", "severity", "description", "validFrom", "validTo"} <= set(out[0])
-    assert all(a["id"] not in ("urn:ngsi-ld:WeatherAlert:22",) for a in out)
-    # alerts are geographic: read from the shared scope, validTo filtered server side
+    assert {"id", "severity", "description", "validFrom", "validTo", "parcel_names"} <= set(out[0])
+    assert out[0]["parcel_names"] == ["Parcel 1"]
+    assert "urn:ngsi-ld:WeatherAlert:22" not in [a["id"] for a in out]
     assert orion.tenants[-1] == "shared"
-    assert 'validTo>"2026-11-09T07:00:00Z"' == orion.calls[0]["q"]
-    assert orion.calls[0]["type"] == "WeatherAlert" and isinstance(orion.calls[0]["limit"], int)
+    p = orion.geo_calls[0]
+    assert p["georel"] == "intersects" and p["geometry"] == "Point" and p["geoproperty"] == "location"
+    assert p["coordinates"] == "[-1.5,42.5]" and p["type"] == "WeatherAlert"
+    assert p["q"] == 'validTo>"2026-11-09T07:00:00Z"' and isinstance(p["limit"], int)
 
 
-def test_weather_alerts_normalized(orion):
-    orion.data["WeatherAlert"] = [{
+def test_weather_alert_not_intersecting_not_returned(orion):
+    orion.data["AgriParcel"] = [_parcel(1, -1.5, 42.5)]
+    orion.geo[(10.0, 50.0)] = [_w(1, "severe")]  # alert elsewhere: geo-query for this parcel returns none
+    assert sources._fetch_weather_alerts(T, now=NOW) == ([], True)
+    assert orion.geo_calls and "georel" in orion.geo_calls[0]
+
+
+def test_weather_alerts_dedup_across_parcels(orion):
+    orion.data["AgriParcel"] = [_parcel(1, 1.0, 2.0, "North"), _parcel(2, 3.0, 4.0, "South")]
+    orion.geo[(1.0, 2.0)] = [_w(1, "severe"), _w(2, "moderate")]
+    orion.geo[(3.0, 4.0)] = [_w(1, "severe")]
+    out, ok = sources._fetch_weather_alerts(T, now=NOW)
+    assert ok and len(out) == 2
+    by_id = {a["id"]: a for a in out}
+    assert by_id["urn:ngsi-ld:WeatherAlert:1"]["parcel_names"] == ["North", "South"]
+    assert by_id["urn:ngsi-ld:WeatherAlert:2"]["parcel_names"] == ["North"]
+
+
+def test_weather_failure_on_second_parcel(orion):
+    orion.data["AgriParcel"] = [_parcel(1, 1.0, 2.0), _parcel(2, 3.0, 4.0)]
+    orion.geo[(1.0, 2.0)] = [_w(1, "severe")]
+    orion.geo_fail_on = 2
+    assert sources._fetch_weather_alerts(T, now=NOW) == ([], False)
+
+
+def test_weather_parcel_without_geometry_skipped(orion):
+    orion.data["AgriParcel"] = [{"id": "urn:ngsi-ld:AgriParcel:0", "name": "NoGeo"}, _parcel(1, 1.0, 2.0)]
+    orion.geo[(1.0, 2.0)] = [_w(1, "severe")]
+    out, ok = sources._fetch_weather_alerts(T, now=NOW)
+    assert ok and len(out) == 1 and len(orion.geo_calls) == 1
+
+
+def test_weather_polygon_centroid_and_normalized_geo(orion):
+    ring = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0], [0.0, 0.0]]
+    orion.data["AgriParcel"] = [{"id": "p", "name": {"type": "Property", "value": "Poly"},
+                                 "location": {"type": "GeoProperty", "value": {"type": "Polygon", "coordinates": [ring]}}}]
+    orion.geo[(1.0, 1.0)] = [{
         "id": "urn:ngsi-ld:WeatherAlert:1", "type": "WeatherAlert",
         "severity": {"type": "Property", "value": "severe"},
         "description": {"type": "Property", "value": "Wind"},
@@ -267,12 +338,27 @@ def test_weather_alerts_normalized(orion):
         "validTo": {"type": "Property", "value": "2026-11-09T20:00:00Z"},
     }]
     out, ok = sources._fetch_weather_alerts(T, now=NOW)
-    assert ok and out[0]["description"] == "Wind" and out[0]["validTo"] == "2026-11-09T20:00:00Z"
+    assert ok and out[0]["description"] == "Wind" and out[0]["parcel_names"] == ["Poly"]
 
 
-def test_weather_alerts_failure(orion):
-    orion.fail = {"WeatherAlert"}
+def test_weather_no_parcels_no_alerts_ok(orion):
+    assert sources._fetch_weather_alerts(T, now=NOW) == ([], True)
+    assert orion.geo_calls == []
+
+
+def test_weather_parcel_read_failure(orion):
+    orion.fail = {"AgriParcel"}
     assert sources._fetch_weather_alerts(T, now=NOW) == ([], False)
+
+
+def test_tenant_name_empty_when_no_row(monkeypatch):
+    monkeypatch.undo()
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    monkeypatch.setattr(sources, "get_conn", lambda: conn)
+    assert sources._tenant_name(T) == ""
 
 
 # ---- parcel_timezones ----

@@ -91,8 +91,8 @@ def _tenant_name(tenant_id: str) -> str:
         conn.close()
     name = (row or {}).get("tenant_name")
     if not name:
-        logger.warning("weekly report: no tenant_name for %s, using id", tenant_id)
-    return name or tenant_id
+        logger.warning("weekly report: no tenant_name for %s; leaving it empty", tenant_id)
+    return name or ""  # never an id: the renderer handles the empty name
 
 
 def _in_cluster(url: str) -> bool:
@@ -160,19 +160,89 @@ def _fetch_alerts(tenant_id: str) -> tuple[list[dict], bool]:
     return out, True
 
 
+def _centroid(entity: dict) -> tuple[float, float] | None:
+    """(lon, lat) centroid of an AgriParcel `location` (normalized or keyValues); None if unusable."""
+    loc = (entity or {}).get("location")
+    value = loc.get("value", loc) if isinstance(loc, dict) else None
+    if not isinstance(value, dict):
+        return None
+    gtype, coords = value.get("type"), value.get("coordinates")
+    try:
+        if gtype == "Point" and isinstance(coords, list) and len(coords) >= 2:
+            return (float(coords[0]), float(coords[1]))
+        if gtype in ("Polygon", "MultiPolygon") and isinstance(coords, list) and coords:
+            ring = coords[0] if gtype == "Polygon" else coords[0][0]
+            pts = [p for p in ring if isinstance(p, list) and len(p) >= 2]
+            if len(pts) > 1 and pts[0][:2] == pts[-1][:2]:
+                pts = pts[:-1]  # closing vertex would skew the mean
+            if pts:
+                return (sum(float(p[0]) for p in pts) / len(pts), sum(float(p[1]) for p in pts) / len(pts))
+    except (TypeError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _geo_query_all(orion, lon: float, lat: float, q: str) -> list[dict]:
+    """Paged WeatherAlert geo-query (the SDK's query_entities has no geo parameters)."""
+    out: list[dict] = []
+    for page_no in range(_MAX_PAGES):
+        resp = orion._session.get(
+            orion._url("/ngsi-ld/v1/entities"),
+            params={
+                "type": "WeatherAlert",
+                "georel": "intersects",
+                "geometry": "Point",
+                "coordinates": f"[{lon},{lat}]",
+                "geoproperty": "location",
+                "q": q,
+                "options": "keyValues",
+                "limit": _PAGE,
+                "offset": page_no * _PAGE,
+            },
+            headers=orion._headers("application/json"),
+            timeout=orion.timeout,
+        )
+        resp.raise_for_status()
+        page = resp.json() or []
+        out.extend(page)
+        if len(page) < _PAGE:
+            return out
+    raise RuntimeError(f"too many WeatherAlert entities (> {_MAX_PAGES * _PAGE})")
+
+
 def _fetch_weather_alerts(tenant_id: str, now: datetime | None = None) -> tuple[list[dict], bool]:
+    """Severe/moderate WeatherAlerts that intersect this tenant's parcels (max 5, severe first)."""
     now = now or datetime.now(timezone.utc)
     now_iso = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = f'validTo>"{now_iso}"'
     try:
+        with _client(tenant_id) as orion:
+            parcels = _query_all(orion, "AgriParcel")
+        points = []
+        for p in parcels:
+            c = _centroid(p)
+            if c is None:
+                logger.warning("weekly report: parcel %s has no usable geometry, skipped for weather alerts",
+                               (p or {}).get("id"))
+                continue
+            points.append((str(_unwrap((p or {}).get("name")) or "").strip(), c))
+        if not points:
+            return [], True
+        found: dict[str, dict] = {}
         with _client(_SHARED_TENANT) as orion:
-            entities = _query_all(orion, "WeatherAlert", f'validTo>"{now_iso}"')
+            for name, (lon, lat) in points:
+                for e in _geo_query_all(orion, lon, lat, q):
+                    if not isinstance(e, dict) or not e.get("id"):
+                        continue
+                    entry = found.setdefault(e["id"], {"entity": e, "parcel_names": []})
+                    if name and name not in entry["parcel_names"]:
+                        entry["parcel_names"].append(name)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("weekly report: WeatherAlert read failed: %s", exc)
+        logger.warning("weekly report: WeatherAlert read failed tenant=%s: %s", tenant_id, exc)
         return [], False
     out = []
-    for e in entities:
-        if not isinstance(e, dict) or not e.get("id"):
-            continue
+    for entry in found.values():
+        e = entry["entity"]
         severity = str(_unwrap(e.get("severity")) or "").lower()
         valid_to = _unwrap(e.get("validTo"))
         if severity not in _WEATHER_SEVERITY_RANK or not isinstance(valid_to, str) or valid_to <= now_iso:
@@ -183,6 +253,7 @@ def _fetch_weather_alerts(tenant_id: str, now: datetime | None = None) -> tuple[
             "description": str(_unwrap(e.get("description")) or "").strip(),
             "validFrom": _unwrap(e.get("validFrom")),
             "validTo": valid_to,
+            "parcel_names": entry["parcel_names"],
         })
     out.sort(key=lambda a: _WEATHER_SEVERITY_RANK[a["severity"]])
     return out[:_WEATHER_CAP], True
@@ -204,8 +275,9 @@ def gather(tenant_id: str, week_start: date) -> Gathered:
     outcomes = []
     for src in list_sources(tenant_id):
         if not _in_cluster(src["weekly_report_url"]):
-            logger.error("weekly report: source %s ignored, URL is not an in-cluster service name",
+            logger.error("weekly report: source %s not called, URL is not an in-cluster service name",
                          src["module_id"])
+            outcomes.append(SourceOutcome(src["module_id"], src["display_name"], False, None))
             continue
         outcomes.append(_call_module(src, tenant_id, week_start))
     alerts, alerts_ok = _fetch_alerts(tenant_id)
