@@ -143,3 +143,13 @@ def test_missing_labels_deduped_and_pure():
     g = gathered([src("a", ok=False, label="Riego"), src("b", ok=False, label="Riego")])
     r = build(g, WS, "w")
     assert r["missing"] == ["Riego"]
+
+
+def test_alerts_without_id_not_dropped():
+    al = [{"plain": {"es": {"title": "A", "body": "a"}}}, {"id": None, "plain": {"es": {"title": "B", "body": "b"}}},
+          {"id": "", "plain": None}, {"id": "u1", "plain": {"es": {"title": "C", "body": "c"}}},
+          {"id": "u1", "plain": {"es": {"title": "C", "body": "c"}}}]
+    r = build(gathered([src(c=contrib([task("1")]))], alerts=al), WS, "w")
+    assert len(r["alerts"]) == 3 and r["extra_alerts"] == 1
+    w = [{"severity": "severe", "description": "x", "parcel_names": []}, {"severity": "severe", "description": "y", "parcel_names": []}]
+    assert len(build(gathered([src(c=contrib([]))], weather=w), WS, "w")["alerts"]) == 2

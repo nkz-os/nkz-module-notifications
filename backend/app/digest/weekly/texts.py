@@ -31,6 +31,8 @@ T = {
         "no_text": "Tarea pendiente, consulta la app para el detalle",
         "more": "y {n} más", "plain_empty": "Sin tareas para las próximas dos semanas.",
         "dec": ",",
+        "when_today": "hoy", "when_overdue": "vencida ({d})", "when_week": "esta semana",
+        "when_date": "para el {d}", "when_undated": "sin fecha",
     },
     "en": {
         "count_one": "1 task", "count_many": "{n} tasks",
@@ -57,6 +59,8 @@ T = {
         "no_text": "Pending task, open the app for details",
         "more": "and {n} more", "plain_empty": "No tasks for the next two weeks.",
         "dec": ".",
+        "when_today": "today", "when_overdue": "overdue ({d})", "when_week": "this week",
+        "when_date": "for {d}", "when_undated": "no date",
     },
     # ASSUMPTION: eu wording is ours — confirm before shipping
     "eu": {
@@ -84,6 +88,8 @@ T = {
         "no_text": "Zain dagoen zeregina, xehetasunak aplikazioan",
         "more": "eta {n} gehiago", "plain_empty": "Ez dago zereginik hurrengo bi asteetarako.",
         "dec": ",",
+        "when_today": "gaur", "when_overdue": "atzeratuta ({d})", "when_week": "aste honetan",
+        "when_date": "{d}rako", "when_undated": "datarik gabe",
     },
 }
 

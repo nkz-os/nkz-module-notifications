@@ -1,6 +1,8 @@
 """Pure rendering of a composed weekly report into email, Zulip and short plain formats (spec 5, 7.5)."""
 import html
+import math
 import re
+from datetime import date
 from urllib.parse import quote
 
 from .texts import norm_lang, pick_text, t
@@ -54,6 +56,43 @@ def _url(app_url, subj, link):
     return f"{app_url.rstrip('/')}/crop-health?parcel={quote(subj['id'], safe='')}"
 
 
+def _finite(v):
+    try:
+        return v is not None and not isinstance(v, bool) and math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
+
+
+def _when(task, week_start, lang):
+    w = task["when"]
+    if w["type"] == "today":
+        return t(lang, "when_today")
+    if w["type"] == "this_week":
+        return t(lang, "when_week")
+    if w["type"] == "date":
+        try:
+            d = date.fromisoformat(w.get("date") or "")
+        except ValueError:
+            return t(lang, "when_undated")
+        if d < week_start:
+            return t(lang, "when_overdue", d=d.strftime("%d/%m"))
+        if d == week_start:
+            return t(lang, "when_today")
+        return t(lang, "when_date", d=d.strftime("%d/%m"))
+    return t(lang, "when_undated")
+
+
+def _alert_text(plain, lang):
+    """-> (title, body) from the first well-formed entry (lang, es, any), or None."""
+    if not isinstance(plain, dict):
+        return None
+    for code in (lang, "es", *plain.keys()):
+        v = plain.get(code)
+        if isinstance(v, dict) and isinstance(v.get("title"), str) and isinstance(v.get("body"), str):
+            return _line(v["title"]), _line(v["body"])
+    return None
+
+
 def _num(x, lang):
     r = round(float(x), 1)
     s = str(int(r)) if r == int(r) else f"{r:.1f}"
@@ -62,7 +101,7 @@ def _num(x, lang):
 
 def _figure_text(fig, lang):
     parts, origins = [], []
-    by_key = {m["key"]: m for m in fig["metrics"] if m.get("value") is not None}
+    by_key = {m["key"]: m for m in fig["metrics"] if _finite(m.get("value"))}
     for key, tkey in _FIG_KEYS:
         m = by_key.get(key)
         if m:
@@ -76,6 +115,7 @@ def _figure_text(fig, lang):
 
 def _blocks(report, lang, app_url):
     lang = norm_lang(lang)
+    ws = date.fromisoformat(report["week_start"])
     b = []
     warn = _warn(report, lang)
     if warn:
@@ -90,16 +130,17 @@ def _blocks(report, lang, app_url):
             for x in items:
                 title = _line(pick_text(x["text"], lang, "title")) or t(lang, "no_text")
                 why = _line(pick_text(x["text"], lang, "why"))
-                b.append(("item", _line(x["subject"]["name"]), title, why, _url(app_url, x["subject"], x["link"])))
+                b.append(("item", _line(x["subject"]["name"]), title, why, _url(app_url, x["subject"], x["link"]),
+                          _when(x, ws, lang)))
     rest = report["unchanged"] if report["status"] == "complete" else 0  # never reassure on partial data
     if report["changes"] or rest:
         b.append(("section", t(lang, "sec_changes")))
         for c in report["changes"]:
             title = _line(pick_text(c["text"], lang, "title")) or t(lang, "no_text")
             b.append(("item", _line(c["subject"]["name"]), title, _line(pick_text(c["text"], lang, "why")),
-                      _url(app_url, c["subject"], c["link"])))
+                      _url(app_url, c["subject"], c["link"]), ""))
         if rest:
-            if report["changes"]:
+            if report["changes"] or report["tasks"]:
                 key = "rest_one" if rest == 1 else "rest_many"
             else:
                 key = "all_one" if rest == 1 else "all_many"
@@ -116,10 +157,17 @@ def _blocks(report, lang, app_url):
                     text = t(lang, "weather_sev", sev=t(lang, "sev_" + sev))
                 else:
                     text = t(lang, "weather_generic")
-                b.append(("item", "", text, "", None))
+                names = [_line(n) for n in a.get("parcel_names") or [] if _line(n)]
+                if names:
+                    shown = ", ".join(names[:3])
+                    if len(names) > 3:
+                        shown += " " + t(lang, "more", n=len(names) - 3)
+                    text += f": {shown}"
+                b.append(("item", "", text, "", None, ""))
             else:
-                p = a["plain"].get(lang) or a["plain"].get("es") or next(iter(a["plain"].values()))
-                b.append(("item", "", _line(p["title"]) or t(lang, "no_text"), _line(p["body"]), None))
+                tb = _alert_text(a.get("plain"), lang)
+                title, body = tb if tb else ("", "")
+                b.append(("item", "", title or t(lang, "no_text"), body, None, ""))
         n = report["extra_alerts"]
         if n:
             b.append(("note", t(lang, "extra_alerts_one" if n == 1 else "extra_alerts_many", n=n)))
@@ -127,15 +175,16 @@ def _blocks(report, lang, app_url):
     for f in report["figures"]:
         text = _figure_text(f, lang)
         if text:
-            fig_items.append(("item", _line(f["subject"]["name"]), text, "", None))
+            fig_items.append(("item", _line(f["subject"]["name"]), text, "", None, ""))
     if fig_items:
         b.append(("section", t(lang, "sec_figures")))
         b.extend(fig_items)
     return b
 
 
-def _head(name, title):
-    return f"{name}: {title}" if name else title
+def _head(name, title, when=""):
+    head = f"{name}: {title}" if name else title
+    return f"{head} — {when}" if when else head
 
 
 def _text(blocks, prefs_url=None, lang="es"):
@@ -149,8 +198,8 @@ def _text(blocks, prefs_url=None, lang="es"):
         elif kind == "group":
             out.append(blk[1])
         elif kind == "item":
-            _, name, title, why, url = blk
-            out.append(f"• {_head(name, title)}")
+            _, name, title, why, url, when = blk
+            out.append(f"• {_head(name, title, when)}")
             if why:
                 out.append(f"  {why}")
             if url:
@@ -192,8 +241,8 @@ def _html(blocks, prefs_url, lang):
             if not in_list:
                 out.append('<ul style="margin:0 0 8px;padding-left:20px">')
                 in_list = True
-            _, name, title, why, url = blk
-            label = e(_head(name, title))
+            _, name, title, why, url, when = blk
+            label = e(_head(name, title, when))
             if url:
                 label = f'<a href="{e(url, quote=True)}" style="color:#0b5cad">{label}</a>'
             why_html = f'<br><span style="color:#4b5563">{e(why)}</span>' if why else ""
@@ -208,12 +257,12 @@ def _html(blocks, prefs_url, lang):
     return "\n".join(out)
 
 
-_MD = re.compile(r"([\\`*_{}\[\]()<>#+!|~@$:-])")
+_MD = re.compile(r"([\\`*_\[\]#<>])")
 
 
 def _md(s):
     # Escapes Markdown and Zulip mention syntax (@**all** would notify the whole stream).
-    return _MD.sub(r"\\\1", s)
+    return _MD.sub(r"\\\1", s).replace("@", "@\u200b")
 
 
 def email(report: dict, lang: str, prefs_url, app_url) -> dict:
@@ -236,8 +285,8 @@ def zulip(report: dict, lang: str, app_url=None) -> str:
         elif kind == "group":
             out.append(f"*{_md(blk[1])}*")
         elif kind == "item":
-            _, name, title, why, url = blk
-            head = _md(_head(name, title))
+            _, name, title, why, url, when = blk
+            head = _md(_head(name, title, when))
             if url:
                 head = f"[{head}]({url.replace(')', '%29')})"
             out.append(f"- {head}")
@@ -254,7 +303,8 @@ def plain(report: dict, lang: str) -> dict:
     lines = []
     for x in tasks[:_PLAIN_MAX]:
         title = _line(pick_text(x["text"], lang, "title")) or t(lang, "no_text")
-        lines.append(_head(_line(x["subject"]["name"]), title))
+        lines.append(_head(_line(x["subject"]["name"]), title,
+                           _when(x, date.fromisoformat(report["week_start"]), lang)))
     if len(tasks) > _PLAIN_MAX:
         lines.append(t(lang, "more", n=len(tasks) - _PLAIN_MAX))
     if not tasks:

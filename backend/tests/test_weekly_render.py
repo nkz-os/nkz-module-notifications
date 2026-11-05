@@ -183,7 +183,7 @@ def test_plain_summary_cap():
     p = render.plain(r, "es")
     assert p["title"] == render.subject(r, "es")
     lines = p["body"].splitlines()
-    assert len(lines) == 4 and lines[-1] == "y 2 más" and lines[0] == "Olivar Norte: Tarea 0"
+    assert len(lines) == 4 and lines[-1] == "y 2 más" and lines[0] == "Olivar Norte: Tarea 0 — hoy"
     assert len(render.plain(rep([task("1")]), "es")["body"].splitlines()) == 1
 
 
@@ -268,3 +268,76 @@ def test_weather_severity_es_exact_and_moderate():
     mod = dict(WEATHER, severity="moderate")
     assert "Aviso meteorológico grave (previsión)" in render.email(rep([task("1")], weather=[WEATHER]), "es", PREFS, APP)["text"]
     assert "Moderate weather alert (forecast)" in render.email(rep([task("1")], weather=[mod]), "en", PREFS, APP)["text"]
+
+
+@pytest.mark.parametrize("when,es,en,eu", [
+    ({"type": "today", "date": None}, "— hoy", "— today", "— gaur"),
+    (d(-3), "— vencida (06/11)", "— overdue (06/11)", "— atzeratuta (06/11)"),
+    ({"type": "this_week", "date": None}, "— esta semana", "— this week", "— aste honetan"),
+    (d(5), "— para el 14/11", "— for 14/11", "— 14/11rako"),
+    (d(10), "— para el 19/11", "— for 19/11", "— 19/11rako"),
+    ({"type": "undated", "date": None}, "— sin fecha", "— no date", "— datarik gabe"),
+])
+def test_each_line_carries_when(when, es, en, eu):
+    r = rep([task("1", when)])
+    for lang, want in (("es", es), ("en", en), ("eu", eu)):
+        e = render.email(r, lang, PREFS, APP)
+        item = [ln for ln in e["text"].splitlines() if ln.startswith("• ")][0]
+        assert want in item
+        assert want in html_unescape(e["content_html"]) and want in render.zulip(r, lang, APP)
+    assert want in render.plain(r, "eu")["body"]
+    assert es in render.plain(r, "es")["body"]
+
+
+def html_unescape(s):
+    import html
+    return html.unescape(s)
+
+
+def test_rest_says_other_when_tasks_exist():
+    sub = lambda i: {"type": "parcel", "id": f"urn:p{i}", "name": f"P{i}"}  # noqa: E731
+    f = [{"subject": sub(i), "metrics": []} for i in (2, 3, 4)]
+    text = render.email(rep([task("1", subj=sub(1))], figures=f), "es", PREFS, APP)["text"]
+    assert "Las otras 3 parcelas, sin novedad." in text
+    text = render.email(rep([], figures=f), "es", PREFS, APP)["text"]
+    assert "Las 3 parcelas, sin novedad." in text and "otras" not in text
+
+
+def test_non_finite_figures_skipped():
+    f = [{"subject": {"type": "parcel", "id": "urn:p", "name": "P"},
+          "metrics": [{"key": "rain_mm", "value": float("nan"), "origin": "estimated"},
+                      {"key": "et0_mm", "value": float("inf"), "origin": "estimated"},
+                      {"key": "gdd", "value": 10, "origin": "estimated"}]}]
+    text = render.email(rep([], figures=f), "es", PREFS, APP)["text"]
+    assert "lluvia" not in text and "evapotranspiración" not in text and "calor acumulado 10" in text
+
+
+def test_malformed_plain_counted_not_crashing():
+    al = [{"id": "a1", "plain": {"es": {"title": "solo titulo"}}}, {"id": "a2", "plain": {"es": "texto"}},
+          {"id": "a3", "plain": {"es": None}}]
+    r = rep([task("1")], alerts=al)
+    assert r["extra_alerts"] == 3 and r["alerts"] == []
+    # stored/legacy report with a malformed entry still renders
+    r["alerts"] = [{"id": "x", "weather": False, "severity": "high", "plain": {"es": {"title": "t"}, "en": "z"}}]
+    assert "Tarea pendiente" in render.email(r, "es", PREFS, APP)["text"]
+    r["alerts"] = [{"id": "x", "weather": False, "severity": "high", "plain": {"es": "z", "en": {"title": "T", "body": "B"}}}]
+    assert "T" in render.email(r, "es", PREFS, APP)["text"]
+
+
+def test_zulip_escapes_only_what_matters():
+    t = task("1", subj={"type": "parcel", "id": "urn:p", "name": "@all @**all** _x_"}, title="a: b (c) - d.")
+    z = render.zulip(rep([t, task("2")]), "es")
+    assert "\\:" not in z and "\\(" not in z and "\\-" not in z and "\\." not in z
+    assert "Esta semana: 2 tareas" in z.splitlines()[0] and "\\" not in z.splitlines()[0]
+    assert "@all" not in z and "@**" not in z
+
+
+def test_weather_alert_names_parcels_capped():
+    w = [dict(WEATHER, parcel_names=["Olivar Norte", "La Vega"])]
+    text = render.email(rep([task("1")], weather=w), "es", PREFS, APP)["text"]
+    assert "Aviso meteorológico grave (previsión): Olivar Norte, La Vega" in text
+    w = [dict(WEATHER, parcel_names=["A", "B", "C", "D", "E"])]
+    text = render.email(rep([task("1")], weather=w), "es", PREFS, APP)["text"]
+    assert "(previsión): A, B, C y 2 más" in text
+    en = render.email(rep([task("1")], weather=w), "en", PREFS, APP)["text"]
+    assert "A, B, C and 2 more" in en

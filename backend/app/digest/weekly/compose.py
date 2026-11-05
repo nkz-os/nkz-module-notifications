@@ -48,6 +48,14 @@ def _dump_text(texts):
     return {k: {"title": v.title, "why": v.why} for k, v in texts.items()}
 
 
+def _clean_plain(plain):
+    """Keep only well-formed {lang: {title: str, body: str}} entries; {} when none is usable."""
+    if not isinstance(plain, dict):
+        return {}
+    return {k: {"title": v["title"], "body": v["body"]} for k, v in plain.items()
+            if isinstance(v, dict) and isinstance(v.get("title"), str) and isinstance(v.get("body"), str)}
+
+
 def build(gathered, week_start: date, iso_week: str) -> dict:
     sources = gathered.sources
     failed = [s for s in sources if not s.ok]
@@ -106,18 +114,21 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
     alerts, extra, alert_ids = [], 0, set()
     for a in gathered.alerts:
         aid = a.get("id")
-        if aid in related or aid in alert_ids:
+        if aid and (aid in related or aid in alert_ids):
             continue
-        alert_ids.add(aid)
-        if a.get("plain"):
-            alerts.append({"id": aid, "weather": False, "severity": a.get("severity"), "plain": a["plain"]})
+        if aid:
+            alert_ids.add(aid)
+        plain = _clean_plain(a.get("plain"))
+        if plain:
+            alerts.append({"id": aid, "weather": False, "severity": a.get("severity"), "plain": plain})
         else:
             extra += 1
     for w in gathered.weather_alerts:
         wid = w.get("id")
-        if wid in related or wid in alert_ids:
+        if wid and (wid in related or wid in alert_ids):
             continue
-        alert_ids.add(wid)
+        if wid:
+            alert_ids.add(wid)
         alerts.append({"id": wid, "weather": True, "severity": w.get("severity"),
                        "description": _one_line(w.get("description")),
                        "parcel_names": [_one_line(n) for n in w.get("parcel_names") or []]})
