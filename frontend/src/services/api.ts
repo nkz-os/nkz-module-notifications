@@ -34,6 +34,11 @@ export interface Channels {
   telegram: TelegramChannel;
 }
 
+export interface WeeklyChannels {
+  email: boolean;
+  zulip: boolean;
+}
+
 export function useModuleApi() {
   const { getToken, getTenantId } = useAuth();
 
@@ -46,5 +51,7 @@ export function useModuleApi() {
   return {
     getChannels: () => client.get<Channels>('/channels'),
     putChannels: (d: Partial<Channels>) => client.put<Channels>('/channels', d),
+    getWeeklyChannels: () => client.get<WeeklyChannels>('/weekly-report/channels'),
+    putWeeklyChannels: (d: WeeklyChannels) => client.put<WeeklyChannels>('/weekly-report/channels', d),
   };
 }

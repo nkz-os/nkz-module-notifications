@@ -29,5 +29,13 @@
     "loadFailed": "Could not load channel configuration.",
     "saveFailed": "An error occurred while saving changes.",
     "forbidden": "You do not have permission to modify channels (admins only)."
+  },
+  "weekly": {
+    "title": "Weekly report",
+    "description": "Every Monday at 07:00 the report goes out to administrators and technicians. The app always shows it.",
+    "email": "By email",
+    "zulip": "By Zulip",
+    "zulipOff": "Turn on the Zulip channel first.",
+    "save": "Save weekly report"
   }
 }

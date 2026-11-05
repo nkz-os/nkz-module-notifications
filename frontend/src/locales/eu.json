@@ -1,0 +1,10 @@
+{
+  "weekly": {
+    "title": "Asteko txostena",
+    "description": "Astelehen bakoitzean 07:00etan txostena administratzaileei eta teknikariei bidaltzen zaie. Aplikazioan beti ikus daiteke.",
+    "email": "Posta elektronikoz",
+    "zulip": "Zulip bidez",
+    "zulipOff": "Aktibatu lehenik Zulip kanala.",
+    "save": "Gorde asteko txostena"
+  }
+}

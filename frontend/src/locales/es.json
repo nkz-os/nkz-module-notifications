@@ -29,5 +29,13 @@
     "loadFailed": "No se pudo cargar la configuración de los canales.",
     "saveFailed": "Ocurrió un error al guardar los cambios.",
     "forbidden": "No tienes permiso para modificar los canales (solo administradores)."
+  },
+  "weekly": {
+    "title": "Informe semanal",
+    "description": "Cada lunes a las 07:00 enviamos el informe a administradores y técnicos. En la aplicación siempre se puede ver.",
+    "email": "Por email",
+    "zulip": "Por Zulip",
+    "zulipOff": "Activa antes el canal de Zulip.",
+    "save": "Guardar informe semanal"
   }
 }
