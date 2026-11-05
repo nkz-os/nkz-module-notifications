@@ -82,9 +82,10 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
         if c is None:
             continue
         for i, task in enumerate(c.tasks):
-            if (s.key, task.id) in seen:
-                continue
-            seen.add((s.key, task.id))
+            if task.id:  # an empty id identifies nothing: never collapse such tasks
+                if (s.key, task.id) in seen:
+                    continue
+                seen.add((s.key, task.id))
             cls = _classify(task.when, week_start)
             if cls is None:
                 continue

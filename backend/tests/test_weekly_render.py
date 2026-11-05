@@ -321,7 +321,7 @@ def test_malformed_plain_counted_not_crashing():
     r["alerts"] = [{"id": "x", "weather": False, "severity": "high", "plain": {"es": {"title": "t"}, "en": "z"}}]
     assert "Tarea pendiente" in render.email(r, "es", PREFS, APP)["text"]
     r["alerts"] = [{"id": "x", "weather": False, "severity": "high", "plain": {"es": "z", "en": {"title": "T", "body": "B"}}}]
-    assert "T" in render.email(r, "es", PREFS, APP)["text"]
+    assert "• T\n  B" in render.email(r, "es", PREFS, APP)["text"]
 
 
 def test_zulip_escapes_only_what_matters():

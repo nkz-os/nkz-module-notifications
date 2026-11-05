@@ -153,3 +153,8 @@ def test_alerts_without_id_not_dropped():
     assert len(r["alerts"]) == 3 and r["extra_alerts"] == 1
     w = [{"severity": "severe", "description": "x", "parcel_names": []}, {"severity": "severe", "description": "y", "parcel_names": []}]
     assert len(build(gathered([src(c=contrib([]))], weather=w), WS, "w")["alerts"]) == 2
+
+
+def test_tasks_with_empty_id_not_collapsed():
+    r = build(gathered([src(c=contrib([task("", title="Uno"), task("", title="Dos")]))]), WS, "w")
+    assert [t["text"]["es"]["title"] for t in r["tasks"]] == ["Uno", "Dos"]
