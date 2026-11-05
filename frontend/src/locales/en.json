@@ -35,7 +35,8 @@
     "description": "Every Monday at 07:00 the report goes out to administrators and technicians. The app always shows it.",
     "email": "By email",
     "zulip": "By Zulip",
-    "zulipOff": "Turn on the Zulip channel first.",
-    "save": "Save weekly report"
+    "zulipOff": "Turn on and save the Zulip channel first.",
+    "save": "Save weekly report",
+    "loadFailed": "Could not load the weekly report settings."
   }
 }

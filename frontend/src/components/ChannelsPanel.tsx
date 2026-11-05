@@ -18,6 +18,7 @@ export default function ChannelsPanel() {
   const [saving, setSaving] = useState(false);
   const [weekly, setWeekly] = useState<WeeklyChannels | null>(null);
   const [weeklyOriginal, setWeeklyOriginal] = useState<WeeklyChannels | null>(null);
+  const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const [weeklySaving, setWeeklySaving] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -36,10 +37,12 @@ export default function ChannelsPanel() {
         const w = await api.getWeeklyChannels();
         setWeekly(w);
         setWeeklyOriginal(w);
-      } catch {
-        // The weekly card stays hidden; alert channels remain usable.
+        setWeeklyError(null);
+      } catch (werr: unknown) {
+        // Alert channels remain usable; the weekly card shows a note instead.
         setWeekly(null);
         setWeeklyOriginal(null);
+        setWeeklyError(isForbidden(werr) ? t('error.forbidden') : t('weekly.loadFailed'));
       }
     } catch (err: any) {
       if (isForbidden(err)) {
@@ -84,10 +87,13 @@ export default function ChannelsPanel() {
   };
 
   const saveWeekly = async () => {
-    if (!weekly) return;
+    if (!weekly || !original) return;
     setWeeklySaving(true);
     try {
-      const saved = await api.putWeeklyChannels({ email: weekly.email, zulip: weekly.zulip });
+      const saved = await api.putWeeklyChannels({
+        email: weekly.email,
+        zulip: weekly.zulip && original.zulip.enabled,
+      });
       setWeekly(saved);
       setWeeklyOriginal(saved);
       showBanner('success', t('success.saved'));
@@ -214,6 +220,12 @@ export default function ChannelsPanel() {
       </Card>
 
       {/* Weekly report Card */}
+      {!weekly && weeklyError && (
+        <Card className="p-6">
+          <h3 className="text-base font-semibold text-nkz-text-primary">{t('weekly.title')}</h3>
+          <p className="text-sm text-nkz-text-muted">{weeklyError}</p>
+        </Card>
+      )}
       {weekly && (
         <Card className="p-6">
           <h3 className="text-base font-semibold text-nkz-text-primary">{t('weekly.title')}</h3>
@@ -228,13 +240,13 @@ export default function ChannelsPanel() {
           <div className="flex items-center justify-between mt-3">
             <div>
               <span className="text-sm text-nkz-text-primary">{t('weekly.zulip')}</span>
-              {!channels.zulip.enabled && (
+              {!original?.zulip.enabled && (
                 <p className="text-xs text-nkz-text-muted">{t('weekly.zulipOff')}</p>
               )}
             </div>
             <Switch
-              checked={weekly.zulip && channels.zulip.enabled}
-              disabled={!channels.zulip.enabled}
+              checked={weekly.zulip && !!original?.zulip.enabled}
+              disabled={!original?.zulip.enabled}
               onChange={(checked: boolean) => setWeekly({ ...weekly, zulip: checked })}
             />
           </div>

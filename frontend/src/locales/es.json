@@ -35,7 +35,8 @@
     "description": "Cada lunes a las 07:00 enviamos el informe a administradores y técnicos. En la aplicación siempre se puede ver.",
     "email": "Por email",
     "zulip": "Por Zulip",
-    "zulipOff": "Activa antes el canal de Zulip.",
-    "save": "Guardar informe semanal"
+    "zulipOff": "Activa y guarda antes el canal de Zulip.",
+    "save": "Guardar informe semanal",
+    "loadFailed": "No se pudo cargar el informe semanal."
   }
 }
