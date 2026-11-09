@@ -311,3 +311,108 @@ def test_failed_push_batch_retried(env, report, monkeypatch):
     env.rows[(T, WEEK, "u2", "push")] = "sent"
     assert deliver.deliver(T, report) is True
     assert [c[2]["json"]["user_ids"] for c in env.posts("/send/push")] == [["u1", "u2"], ["u1"]]
+
+
+# ---- K: timeouts and unknown ----
+
+import requests as _rq  # noqa: E402
+
+
+def test_report_email_timeout_connect_5_read_70(monkeypatch):
+    seen = {}
+
+    def post(url, json=None, headers=None, timeout=None):
+        seen["timeout"] = timeout
+        return Resp(200)
+
+    monkeypatch.setattr(adapters.requests, "post", post)
+    res = adapters.report_email_adapter({"email": "a@example.org"}, "http://email", "s")
+    assert res.status == "sent" and seen["timeout"] == (5, 70)
+
+
+def test_report_email_read_timeout_is_unknown_connect_error_is_failed(monkeypatch):
+    def slow(*a, **k):
+        raise _rq.exceptions.ReadTimeout("slow")
+
+    monkeypatch.setattr(adapters.requests, "post", slow)
+    assert adapters.report_email_adapter({"email": "a@example.org"}, "http://email").status == "unknown"
+
+    def refused(*a, **k):
+        raise _rq.exceptions.ConnectTimeout("no route")
+
+    monkeypatch.setattr(adapters.requests, "post", refused)
+    assert adapters.report_email_adapter({"email": "a@example.org"}, "http://email").status == "failed"
+
+
+def test_email_read_timeout_recorded_unknown_and_not_resent(env, report, monkeypatch):
+    calls = {"n": 0}
+
+    def slow_post(url, **kw):
+        if url.endswith("/send/report"):
+            calls["n"] += 1
+            raise _rq.exceptions.ReadTimeout("slow")
+        return env.post(url, **kw)
+
+    monkeypatch.setattr("requests.post", slow_post)
+    env.channels = {"email": True, "zulip": False}
+    assert deliver.deliver(T, report) is True
+    assert env.rows[(T, WEEK, "u1", "email")] == "unknown"
+    assert deliver.deliver(T, report) is True
+    assert calls["n"] == 2  # one per user, never retried
+
+
+def test_zulip_report_call_has_timeout_and_unknown(env, report, monkeypatch):
+    seen = {}
+
+    def post(url, **kw):
+        if url.endswith("/internal/message"):
+            seen["timeout"] = kw.get("timeout")
+            raise _rq.exceptions.ReadTimeout("slow")
+        return env.post(url, **kw)
+
+    monkeypatch.setattr("requests.post", post)
+    assert deliver.deliver(T, report, include_zulip=True) is True
+    assert seen["timeout"] == (5, 70)
+    assert env.rows[(T, WEEK, "", "zulip")] == "unknown"
+
+
+def test_normal_zulip_alert_unchanged(monkeypatch):
+    seen = {}
+
+    def post(url, json=None, headers=None, timeout=None):
+        seen["timeout"] = timeout
+        raise _rq.exceptions.ReadTimeout("slow")
+
+    monkeypatch.setattr(adapters.requests, "post", post)
+    res = adapters.zulip_adapter({"summary": "x"}, {"enabled": True}, "http://z", "s")
+    assert res.status == "failed" and seen["timeout"] == 10
+
+
+# ---- L: recipients ----
+
+def test_fetch_recipients_timeout_60(env):
+    deliver.fetch_recipients(T)
+    assert [c for c in env.calls if c[0] == "GET"][0][2]["timeout"] == 60
+
+
+def test_zero_recipients_logs_error_and_returns_false(env, report, caplog):
+    env.users = []
+    with caplog.at_level(logging.ERROR):
+        assert deliver.deliver(T, report, include_zulip=True) is False
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert env.posts("/send/report") == [] and env.posts("/send/push") == []
+
+
+def test_push_no_tokens_is_skipped_not_sent(env, report, monkeypatch):
+    orig = env.post
+
+    def post(url, **kw):
+        if url.endswith("/send/push"):
+            env.calls.append(("POST", url, kw))
+            return Resp(200, {"status": "no_tokens", "message": "No registered devices for this tenant"})
+        return orig(url, **kw)
+
+    monkeypatch.setattr("requests.post", post)
+    env.channels = {"email": False, "zulip": False}
+    assert deliver.deliver(T, report) is True
+    assert env.rows[(T, WEEK, "u1", "push")] == env.rows[(T, WEEK, "u2", "push")] == "skipped"

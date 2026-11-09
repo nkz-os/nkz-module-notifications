@@ -13,13 +13,17 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# (connect, read) seconds for the weekly report: SMTP can take far longer than an alert.
+REPORT_TIMEOUT = (5, 70)
+
 
 class DeliveryResult:
     def __init__(self, channel: str, status: str, error: str | None = None):
         self.channel = channel
-        self.status = status  # sent | failed | skipped
+        self.status = status  # sent | failed | skipped | unknown (weekly report only: may have been delivered)
         self.error = error
         self.code: int | None = None  # HTTP status when the failure came from a response
+        self.body_status: str | None = None  # "status" field of a 200 JSON body, when present
 
     def to_dict(self) -> dict:
         return {"channel": self.channel, "status": self.status, "error": self.error}
@@ -62,10 +66,14 @@ def report_email_adapter(payload: dict, email_service_url: str, internal_secret:
         return DeliveryResult("email", "skipped")
     headers = {"X-Internal-Service-Secret": internal_secret} if internal_secret else {}
     try:
-        r = requests.post(f"{email_service_url}/send/report", json=payload, headers=headers, timeout=10)
+        r = requests.post(f"{email_service_url}/send/report", json=payload, headers=headers,
+                          timeout=REPORT_TIMEOUT)
         if r.status_code == 200:
             return DeliveryResult("email", "sent")
         return DeliveryResult("email", "failed", f"HTTP {r.status_code}")
+    except requests.exceptions.ReadTimeout as e:
+        # The request was sent: the mail may have gone out. Never resend it.
+        return DeliveryResult("email", "unknown", type(e).__name__)
     except Exception as e:
         return DeliveryResult("email", "failed", type(e).__name__)
 
@@ -91,7 +99,13 @@ def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secr
             timeout=10,
         )
         if r.status_code == 200:
-            return DeliveryResult("push", "sent")
+            res = DeliveryResult("push", "sent")
+            try:
+                body = r.json()
+                res.body_status = body.get("status") if isinstance(body, dict) else None
+            except Exception:  # noqa: BLE001 - an unreadable body is just "no extra status"
+                pass
+            return res
         res = DeliveryResult("push", "failed", r.text[:200])
         res.code = r.status_code
         return res
@@ -99,7 +113,9 @@ def push_adapter(alert: dict, config: dict, push_service_url: str, internal_secr
         return DeliveryResult("push", "failed", str(e))
 
 
-def zulip_adapter(alert: dict, config: dict, zulip_service_url: str, internal_secret: str) -> DeliveryResult:
+def zulip_adapter(alert: dict, config: dict, zulip_service_url: str, internal_secret: str,
+                  timeout=None) -> DeliveryResult:
+    """With `timeout` (weekly report) a read timeout is `unknown`; without it, behaviour is unchanged."""
     if not config.get("enabled"):
         return DeliveryResult("zulip", "skipped")
     stream = config.get("stream", "alerts")
@@ -109,11 +125,15 @@ def zulip_adapter(alert: dict, config: dict, zulip_service_url: str, internal_se
             f"{zulip_service_url}/internal/message",
             json={"stream": stream, "topic": topic, "content": alert.get("summary", "")},
             headers={"X-Internal-Service-Secret": internal_secret},
-            timeout=10,
+            timeout=timeout if timeout is not None else 10,
         )
         if r.status_code == 200:
             return DeliveryResult("zulip", "sent")
         return DeliveryResult("zulip", "failed", r.text[:200])
+    except requests.exceptions.ReadTimeout as e:
+        if timeout is not None:
+            return DeliveryResult("zulip", "unknown", type(e).__name__)
+        return DeliveryResult("zulip", "failed", str(e))
     except Exception as e:
         return DeliveryResult("zulip", "failed", str(e))
 

@@ -26,7 +26,7 @@ def fetch_recipients(tenant_id: str) -> list[dict]:
         f"{s.tenant_user_api_url}/internal/tenants/{tenant_id}/users",
         params={"roles": ROLES},
         headers={"X-Internal-Service-Secret": s.internal_service_secret},
-        timeout=10,
+        timeout=60,
     )
     if r.status_code != 200:
         raise RuntimeError(f"recipients API answered HTTP {r.status_code}")
@@ -74,6 +74,10 @@ def deliver(tenant_id: str, report: dict, *, only_user_id: str | None = None, in
         cfg = _tenant_cfg(tenant_id)
     except Exception as e:
         logger.error("weekly_report: cannot prepare delivery tenant=%s week=%s: %s", tenant_id, week, e)
+        return False
+    if not users:
+        # Nobody to send to: never mark the week delivered.
+        logger.error("weekly_report: no recipients tenant=%s week=%s", tenant_id, week)
         return False
 
     ok = True
@@ -150,7 +154,7 @@ def _send_email(s, tenant_id, report, week, uid, email, locale, default_lang, ba
             s.email_service_url, s.internal_service_secret)
     except Exception as e:
         res = adapters.DeliveryResult("email", "failed", type(e).__name__)
-    status = res.status if res.status in ("sent", "skipped") else "failed"
+    status = res.status if res.status in ("sent", "skipped", "unknown") else "failed"
     store.finish_delivery(tenant_id, week, uid, "email", status, _scrub(res.error, email))
     logger.info("weekly_report: email %s tenant=%s week=%s user=%s", status, tenant_id, week, uid)
     return status != "failed"
@@ -168,12 +172,15 @@ def _send_push(s, tenant_id, report, week, user_ids, lang) -> bool:
             {"enabled": True}, s.push_service_url, s.internal_service_secret)
     except Exception as e:
         res = adapters.DeliveryResult("push", "failed", type(e).__name__)
-    status = "sent" if res.status == "sent" else "failed"
-    err = None if status == "sent" else (f"HTTP {res.code}" if res.code else (res.error or "failed")[:40])
+    if res.status == "sent" and res.body_status == "no_tokens":
+        status, err = "skipped", "no_tokens"  # nobody has a registered device: not "sent to anyone"
+    else:
+        status = "sent" if res.status == "sent" else "failed"
+        err = None if status == "sent" else (f"HTTP {res.code}" if res.code else (res.error or "failed")[:40])
     for uid in user_ids:
         store.finish_delivery(tenant_id, week, uid, "push", status, err)
     logger.info("weekly_report: push %s tenant=%s week=%s users=%d", status, tenant_id, week, len(user_ids))
-    return status == "sent"
+    return status != "failed"
 
 
 def _send_zulip(s, tenant_id, report, week, zcfg, lang, app_url) -> bool:
@@ -188,10 +195,10 @@ def _send_zulip(s, tenant_id, report, week, zcfg, lang, app_url) -> bool:
         res = adapters.zulip_adapter(
             {"summary": render.zulip(report, lang, app_url)},
             {"enabled": True, "stream": stream, "topic": ZULIP_TOPIC},
-            s.zulip_service_url, s.internal_service_secret)
+            s.zulip_service_url, s.internal_service_secret, timeout=adapters.REPORT_TIMEOUT)
     except Exception as e:
         res = adapters.DeliveryResult("zulip", "failed", type(e).__name__)
-    status = "sent" if res.status == "sent" else "failed"
+    status = res.status if res.status in ("sent", "unknown") else "failed"  # unknown: may have posted, never resend
     store.finish_delivery(tenant_id, week, "", "zulip", status, res.error)
     logger.info("weekly_report: zulip %s tenant=%s week=%s", status, tenant_id, week)
-    return status == "sent"
+    return status != "failed"
