@@ -1,9 +1,11 @@
 """Public (no login) weekly-report preferences page.
 
 Separate router: it must NOT inherit the internal router's auth dependency.
-GET never changes state (mail scanners open links); POST applies the change,
-including the RFC 8058 one-click POST. Every response, errors included, carries
-the same safe headers. Tokens and query strings are never logged.
+GET never changes state (mail scanners open links); POST applies the change: the form
+(marked by a hidden `form=1`; checkbox present = receive, absent = stop) or the RFC 8058
+one-click POST. A POST with neither marker changes nothing. Every response, errors included,
+carries the same safe headers. The application never logs tokens or query strings; the access
+log of the server in front of it may hold the URL.
 """
 import html
 import logging
@@ -33,8 +35,8 @@ _TEXTS = {
         "title": "Informe semanal",
         "on": "Recibes el informe semanal de la explotación.",
         "off": "No recibes el informe semanal de la explotación.",
-        "stop": "Dejar de recibirlo",
-        "resume": "Volver a recibirlo",
+        "receive": "Recibir el informe semanal",
+        "save": "Guardar",
         "done_off": "Listo: ya no recibirás el informe semanal.",
         "done_on": "Listo: volverás a recibir el informe semanal.",
         "invalid": "Este enlace no es válido o ha caducado.",
@@ -43,8 +45,8 @@ _TEXTS = {
         "title": "Asteko txostena",
         "on": "Ustiapenaren asteko txostena jasotzen duzu.",
         "off": "Ez duzu ustiapenaren asteko txostenik jasotzen.",
-        "stop": "Jasotzeari utzi",
-        "resume": "Berriz jaso",
+        "receive": "Asteko txostena jaso",
+        "save": "Gorde",
         "done_off": "Eginda: ez duzu asteko txostenik jasoko.",
         "done_on": "Eginda: berriz jasoko duzu asteko txostena.",
         "invalid": "Esteka hau ez da baliozkoa edo iraungi egin da.",
@@ -53,8 +55,8 @@ _TEXTS = {
         "title": "Weekly report",
         "on": "You receive the weekly farm report.",
         "off": "You do not receive the weekly farm report.",
-        "stop": "Stop receiving it",
-        "resume": "Receive it again",
+        "receive": "Receive the weekly report",
+        "save": "Save",
         "done_off": "Done: you will no longer receive the weekly report.",
         "done_on": "Done: you will receive the weekly report again.",
         "invalid": "This link is not valid or has expired.",
@@ -69,14 +71,17 @@ def _lang(raw: str | None) -> str:
     return default if default in _TEXTS else "en"
 
 
-def _page(lang: str, message: str, status: int, form: tuple[str, str, str] | None = None) -> HTMLResponse:
+def _page(lang: str, message: str, status: int, form: tuple[str, bool] | None = None) -> HTMLResponse:
     t = _TEXTS[lang]
     body = f"<p>{html.escape(message)}</p>"
     if form:
-        action_url, action, label = form
+        action_url, receiving = form
         body += (
             f'<form method="post" action="{html.escape(action_url, quote=True)}">'
-            f'<button type="submit" name="action" value="{action}">{html.escape(label)}</button></form>'
+            '<input type="hidden" name="form" value="1">'
+            f'<p><label><input type="checkbox" name="receive" value="1"{" checked" if receiving else ""}> '
+            f'{html.escape(t["receive"])}</label></p>'
+            f'<button type="submit">{html.escape(t["save"])}</button></form>'
         )
     doc = (
         f'<!DOCTYPE html><html lang="{lang}"><head><meta charset="utf-8">'
@@ -109,8 +114,7 @@ def _self_url(request: Request, lang: str) -> str:
 def _state_page(request: Request, user: str, tenant: str, lang: str, message: str | None = None) -> HTMLResponse:
     t = _TEXTS[lang]
     out = store.is_opted_out(tenant, user)
-    action, label = ("subscribe", t["resume"]) if out else ("unsubscribe", t["stop"])
-    return _page(lang, message or (t["off"] if out else t["on"]), 200, (_self_url(request, lang), action, label))
+    return _page(lang, message or (t["off"] if out else t["on"]), 200, (_self_url(request, lang), not out))
 
 
 @router.get("/report-preferences")
@@ -133,12 +137,11 @@ async def post_preferences(request: Request):
     raw = (await request.body())[:4096]
     form = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
     if form.get("List-Unsubscribe") == ["One-Click"]:
-        action = "unsubscribe"
+        enabled = False
+    elif form.get("form") == ["1"]:
+        enabled = form.get("receive") == ["1"]  # a checkbox that is not ticked sends nothing
     else:
-        action = (form.get("action") or [""])[0]
-    if action not in ("unsubscribe", "subscribe"):
         return _page(lang, t["invalid"], 400)
-    enabled = action == "subscribe"
     store.set_pref(tenant, user, enabled)
     logger.info("report preference changed enabled=%s", enabled)
     return _state_page(request, user, tenant, lang, t["done_on"] if enabled else t["done_off"])
