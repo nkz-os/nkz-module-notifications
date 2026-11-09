@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Mail, MessageSquare } from 'lucide-react';
 import { Card, Switch, Input, Button, Skeleton } from '@nekazari/ui-kit';
-import { useModuleApi, Channels } from '../services/api';
+import { useModuleApi, Channels, WeeklyChannels } from '../services/api';
 
 // NKZClient throws `Error("HTTP <status> ...")` (no response object).
 const isForbidden = (err: unknown): boolean =>
@@ -16,6 +16,10 @@ export default function ChannelsPanel() {
   const [original, setOriginal] = useState<Channels | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [weekly, setWeekly] = useState<WeeklyChannels | null>(null);
+  const [weeklyOriginal, setWeeklyOriginal] = useState<WeeklyChannels | null>(null);
+  const [weeklyError, setWeeklyError] = useState<string | null>(null);
+  const [weeklySaving, setWeeklySaving] = useState(false);
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
@@ -29,6 +33,17 @@ export default function ChannelsPanel() {
       const data = await api.getChannels();
       setChannels(data);
       setOriginal(data);
+      try {
+        const w = await api.getWeeklyChannels();
+        setWeekly(w);
+        setWeeklyOriginal(w);
+        setWeeklyError(null);
+      } catch (werr: unknown) {
+        // Alert channels remain usable; the weekly card shows a note instead.
+        setWeekly(null);
+        setWeeklyOriginal(null);
+        setWeeklyError(isForbidden(werr) ? t('error.forbidden') : t('weekly.loadFailed'));
+      }
     } catch (err: any) {
       if (isForbidden(err)) {
         setBanner({ type: 'error', message: t('error.forbidden') });
@@ -70,6 +85,31 @@ export default function ChannelsPanel() {
       setSaving(false);
     }
   };
+
+  const saveWeekly = async () => {
+    if (!weekly || !original) return;
+    setWeeklySaving(true);
+    try {
+      const saved = await api.putWeeklyChannels({
+        email: weekly.email,
+        zulip: weekly.zulip && original.zulip.enabled,
+      });
+      setWeekly(saved);
+      setWeeklyOriginal(saved);
+      showBanner('success', t('success.saved'));
+    } catch (err: any) {
+      if (isForbidden(err)) {
+        showBanner('error', t('error.forbidden'));
+      } else {
+        showBanner('error', t('error.saveFailed'));
+      }
+    } finally {
+      setWeeklySaving(false);
+    }
+  };
+
+  const weeklyChanged =
+    !!weekly && !!weeklyOriginal && JSON.stringify(weekly) !== JSON.stringify(weeklyOriginal);
 
   const hasChanges = () => {
     if (!channels || !original) return false;
@@ -179,9 +219,53 @@ export default function ChannelsPanel() {
         )}
       </Card>
 
+      {/* Weekly report Card */}
+      {!weekly && weeklyError && (
+        <Card className="p-6">
+          <h3 className="text-base font-semibold text-nkz-text-primary">{t('weekly.title')}</h3>
+          <p className="text-sm text-nkz-text-muted">{weeklyError}</p>
+        </Card>
+      )}
+      {weekly && (
+        <Card className="p-6">
+          <h3 className="text-base font-semibold text-nkz-text-primary">{t('weekly.title')}</h3>
+          <p className="text-sm text-nkz-text-muted mb-4">{t('weekly.description')}</p>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-nkz-text-primary">{t('weekly.email')}</span>
+            <Switch
+              checked={weekly.email}
+              onChange={(checked: boolean) => setWeekly({ ...weekly, email: checked })}
+            />
+          </div>
+          <div className="flex items-center justify-between mt-3">
+            <div>
+              <span className="text-sm text-nkz-text-primary">{t('weekly.zulip')}</span>
+              {!original?.zulip.enabled && (
+                <p className="text-xs text-nkz-text-muted">{t('weekly.zulipOff')}</p>
+              )}
+            </div>
+            <Switch
+              checked={weekly.zulip && !!original?.zulip.enabled}
+              disabled={!original?.zulip.enabled}
+              onChange={(checked: boolean) => setWeekly({ ...weekly, zulip: checked })}
+            />
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button
+              variant="primary"
+              onClick={saveWeekly}
+              disabled={!weeklyChanged || weeklySaving}
+            >
+              {weeklySaving ? t('saving') : t('weekly.save')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <div className="flex items-center justify-between pt-4">
         <span className="text-sm text-nkz-text-muted">{t('moreComingSoon')}</span>
         <Button
+          variant="primary"
           onClick={saveChannels}
           disabled={!hasChanges() || saving}
         >
