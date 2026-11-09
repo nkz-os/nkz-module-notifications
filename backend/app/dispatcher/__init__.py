@@ -48,7 +48,7 @@ class NotificationDispatcher:
 
         plan = [
             ("email", adapters.email_adapter, {"email_service_url": s.email_service_url, "internal_secret": s.internal_service_secret}),
-            ("push", adapters.push_adapter, {"push_service_url": s.push_service_url, "internal_secret": s.internal_service_secret}),
+            ("push", adapters.push_adapter, {"push_service_url": s.push_service_url, "internal_secret": s.push_secret}),
             ("zulip", adapters.zulip_adapter, {"zulip_service_url": s.zulip_service_url, "internal_secret": s.internal_service_secret}),
             ("webhook", adapters.webhook_adapter, {}),
             ("telegram", adapters.telegram_adapter, {}),
