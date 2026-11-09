@@ -416,3 +416,17 @@ def test_push_no_tokens_is_skipped_not_sent(env, report, monkeypatch):
     env.channels = {"email": False, "zulip": False}
     assert deliver.deliver(T, report) is True
     assert env.rows[(T, WEEK, "u1", "push")] == env.rows[(T, WEEK, "u2", "push")] == "skipped"
+
+
+def test_push_uses_push_secret_when_set(monkeypatch, env, report):
+    s = deliver.get_settings()
+    monkeypatch.setattr(deliver, "get_settings", lambda: s.model_copy(update={"push_internal_secret": "pushkey"}))
+    deliver.deliver(T, report, include_zulip=True)
+    assert env.posts("/send/push")[0][2]["headers"] == {"X-Internal-Secret": "pushkey"}
+
+
+def test_push_secret_falls_back_to_internal_secret():
+    from app.config import Settings
+    s = Settings(_env_file=None, internal_service_secret="int")
+    assert s.push_secret == "int"
+    assert Settings(_env_file=None, internal_service_secret="int", push_internal_secret="p").push_secret == "p"

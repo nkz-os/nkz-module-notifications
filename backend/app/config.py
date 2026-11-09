@@ -15,6 +15,12 @@ class Settings(BaseSettings):
 
     # Internal service-to-service auth (Orion notify, in-cluster callers).
     internal_service_secret: str = ""
+    # The push service checks its own key (X-Internal-Secret); empty = use internal_service_secret.
+    push_internal_secret: str = ""
+
+    @property
+    def push_secret(self) -> str:
+        return self.push_internal_secret or self.internal_service_secret
 
     # PostgreSQL (channels, deliveries, digest queue).
     postgres_url: str = ""

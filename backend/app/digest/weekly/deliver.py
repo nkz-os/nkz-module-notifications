@@ -169,7 +169,7 @@ def _send_push(s, tenant_id, report, week, user_ids, lang) -> bool:
              "data": {"alertType": "weekly_report", "entityId": week, "parcelId": None,
                       "plain": {"title": p["title"], "body": p["body"]}, "urgency": "silent",
                       "action": {"kind": "open_report", "params": {"reportId": week}}}},
-            {"enabled": True}, s.push_service_url, s.internal_service_secret)
+            {"enabled": True}, s.push_service_url, s.push_secret)
     except Exception as e:
         res = adapters.DeliveryResult("push", "failed", type(e).__name__)
     if res.status == "sent" and res.body_status == "no_tokens":
