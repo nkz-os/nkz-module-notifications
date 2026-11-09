@@ -122,7 +122,7 @@ def test_alert_related_to_task_not_repeated():
 
 
 def test_alert_of_dropped_task_still_shown():
-    al = [{"id": "urn:a1", "plain": {"es": {"title": "Roya", "body": "Alta"}}}]
+    al = [{"id": "urn:a1", "severity": "high", "plain": {"es": {"title": "Roya", "body": "Alta"}}}]
     r = build(gathered([src(c=contrib([task("1", d(20), related="urn:a1")]))], alerts=al), WS, "w")
     assert [a["id"] for a in r["alerts"]] == ["urn:a1"]
 
@@ -149,9 +149,10 @@ def test_missing_labels_deduped_and_pure():
 
 
 def test_alerts_without_id_not_dropped():
-    al = [{"plain": {"es": {"title": "A", "body": "a"}}}, {"id": None, "plain": {"es": {"title": "B", "body": "b"}}},
-          {"id": "", "plain": None}, {"id": "u1", "plain": {"es": {"title": "C", "body": "c"}}},
-          {"id": "u1", "plain": {"es": {"title": "C", "body": "c"}}}]
+    al = [{"severity": "high", "plain": {"es": {"title": "A", "body": "a"}}},
+          {"id": None, "severity": "high", "plain": {"es": {"title": "B", "body": "b"}}},
+          {"id": "", "plain": None}, {"id": "u1", "severity": "high", "plain": {"es": {"title": "C", "body": "c"}}},
+          {"id": "u1", "severity": "high", "plain": {"es": {"title": "C", "body": "c"}}}]
     r = build(gathered([src(c=contrib([task("1")]))], alerts=al), WS, "w")
     assert len(r["alerts"]) == 3 and r["extra_alerts"] == 1
     w = [{"severity": "severe", "description": "x", "parcel_names": []}, {"severity": "severe", "description": "y", "parcel_names": []}]
@@ -170,3 +171,27 @@ def test_unknown_count_is_summed_and_defaults_to_zero():
     assert r["unknown_count"] == 3
     assert build(gathered([src(c=contrib([task("1")]))]), WS, "w")["unknown_count"] == 0
     assert Contribution.parse({"version": 1, "complete": True}).unknown_count == 0
+
+
+def _al(aid, sev, ent="urn:ngsi-ld:AgriParcel:p1", typ="pest_risk", title="T"):
+    return {"id": aid, "severity": sev, "entity_id": ent, "alert_type": typ,
+            "plain": {"es": {"title": title, "body": "B"}}}
+
+
+def test_only_high_and_critical_alerts_listed_rest_counted():
+    al = [_al("a1", "medium"), _al("a2", "low", typ="x"), _al("a3", "high", typ="y"), _al("a4", "critical", typ="z")]
+    r = build(gathered([src(c=contrib([task("1")]))], alerts=al), WS, "w")
+    assert [a["id"] for a in r["alerts"]] == ["a4", "a3"]
+    assert r["extra_alerts"] == 2
+
+
+def test_same_parcel_and_type_listed_once():
+    al = [_al("a1", "high"), _al("a2", "high"), _al("a3", "high", ent="urn:ngsi-ld:AgriParcel:p2")]
+    r = build(gathered([src(c=contrib([task("1")]))], alerts=al), WS, "w")
+    assert [a["id"] for a in r["alerts"]] == ["a1", "a3"]
+    assert r["extra_alerts"] == 0
+
+
+def test_low_alerts_still_block_nothing_urgent():
+    r = build(gathered([src(c=contrib([]))], alerts=[_al("a1", "medium")]), WS, "w")
+    assert r["alerts"] == [] and r["extra_alerts"] == 1
