@@ -5,6 +5,9 @@ HORIZON_DAYS = 13
 _GROUPS = ("now", "week", "next", "undated")
 
 
+_LISTED_SEVERITY = {"critical": 0, "high": 1}
+
+
 def _one_line(s) -> str:
     return " ".join(str(s or "").split())
 
@@ -114,18 +117,29 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
     tasks = [r[2] for r in ranked]
 
     related = {t["relatedAlertId"] for t in tasks if t["relatedAlertId"]}
-    alerts, extra, alert_ids = [], 0, set()
+    alerts, extra, alert_ids, seen_kinds = [], 0, set(), set()
+    listed = []
     for a in gathered.alerts:
         aid = a.get("id")
         if aid and (aid in related or aid in alert_ids):
             continue
         if aid:
             alert_ids.add(aid)
+        sev = str(a.get("severity") or "").lower()
         plain = _clean_plain(a.get("plain"))
-        if plain:
-            alerts.append({"id": aid, "weather": False, "severity": a.get("severity"), "plain": plain})
-        else:
+        # Only high and critical alerts are listed, once per subject and type; the rest
+        # are counted so the reader still knows they exist and "nothing urgent" never shows.
+        if not plain or sev not in _LISTED_SEVERITY:
             extra += 1
+            continue
+        kind = (a.get("entity_id") or aid or "", a.get("alert_type") or "")
+        if kind[0] and kind in seen_kinds:
+            continue
+        seen_kinds.add(kind)
+        listed.append((_LISTED_SEVERITY[sev], len(listed),
+                       {"id": aid, "weather": False, "severity": a.get("severity"), "plain": plain}))
+    listed.sort(key=lambda r: (r[0], r[1]))
+    alerts.extend(r[2] for r in listed)
     for w in gathered.weather_alerts:
         wid = w.get("id")
         if wid and (wid in related or wid in alert_ids):
