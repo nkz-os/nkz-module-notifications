@@ -37,7 +37,6 @@ def client(monkeypatch):
     from app.api import weekly
 
     monkeypatch.setattr(weekly, "_now", lambda: datetime(2026, 11, 11, 10, tzinfo=timezone.utc))  # Wed W46
-    monkeypatch.setattr(weekly.sources, "parcel_timezones", lambda t: ["Europe/Madrid"])
     state = {"row": row(), "channels": {"email": True, "zulip": False}}
     monkeypatch.setattr(weekly.store, "get_report", lambda t: state["row"])
     monkeypatch.setattr(weekly.store, "get_channels", lambda t: dict(state["channels"]))
@@ -84,25 +83,53 @@ def test_latest_404_no_report_and_no_sources_and_missed(client):
     assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 404
 
 
-def test_latest_zone_unreadable_uses_utc(client, monkeypatch):
+def _no_orion(monkeypatch):
     from app.api import weekly
+
+    class OrionCalled(BaseException):  # not swallowed by `except Exception`
+        pass
 
     def boom(t):
-        raise RuntimeError("orion")
+        raise OrionCalled("latest must not call Orion")
 
-    monkeypatch.setattr(weekly.sources, "parcel_timezones", boom)
+    from app.digest.weekly import sources
+
+    monkeypatch.setattr(sources, "parcel_timezones", boom)
+
+
+def test_latest_never_calls_orion_and_absent_zone_is_utc(client, monkeypatch):
+    _no_orion(monkeypatch)
+    assert "time_zone" not in client.state["row"]["content"]
     assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 200
 
 
-def test_latest_uses_tenant_zone_for_week(client, monkeypatch):
+def test_latest_uses_zone_stored_in_content(client, monkeypatch):
     from app.api import weekly
 
+    _no_orion(monkeypatch)
     # Sunday 23:30 UTC is already Monday 2026-11-16 (W47) in a UTC+14 zone, still W46 in UTC
     monkeypatch.setattr(weekly, "_now", lambda: datetime(2026, 11, 15, 23, 30, tzinfo=timezone.utc))
-    monkeypatch.setattr(weekly.sources, "parcel_timezones", lambda t: ["Pacific/Kiritimati"])
+    client.state["row"] = row(content={**REPORT_CONTENT, "time_zone": "Pacific/Kiritimati"})
     assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 404
-    monkeypatch.setattr(weekly.sources, "parcel_timezones", lambda t: ["UTC"])
+    client.state["row"] = row(content={**REPORT_CONTENT, "time_zone": "UTC"})
     assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 200
+    client.state["row"] = row(content={**REPORT_CONTENT, "time_zone": "Not/AZone"})  # invalid: UTC
+    assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 200
+
+
+def test_latest_serves_missed_week_with_content(client, monkeypatch):
+    _no_orion(monkeypatch)
+    client.state["row"] = row(status="missed")
+    r = client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin"))
+    assert r.status_code == 200 and "Regar" in r.json()["plain"]["body"]
+
+
+@pytest.mark.parametrize("content", [None, "text", [], {"status": "complete"},
+                                     {**REPORT_CONTENT, "tasks": [{"id": "x"}]}])
+def test_latest_malformed_content_is_404_not_500(client, content):
+    client.state["row"] = row(content=content if content is not None else {})
+    client.state["row"]["content"] = content
+    assert client.get(f"{P}/weekly-report/latest", headers=hdr("TenantAdmin")).status_code == 404
 
 
 # ---- channels ----

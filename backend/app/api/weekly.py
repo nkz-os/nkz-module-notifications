@@ -6,12 +6,13 @@ authenticates Orion notifications and refuses the master secret in production.
 import hmac
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.config import get_settings
-from app.digest.weekly import render, schedule, sources, store
+from app.digest.weekly import render, schedule, store
 from app.digest.weekly.texts import LANGS
 from app.middleware import AuthContext, require_roles
 
@@ -38,31 +39,42 @@ class ChannelsBody(BaseModel):
     zulip: StrictBool
 
 
+def _stored_zone(content) -> ZoneInfo:
+    """Zone saved with the report; UTC when absent or invalid. Never asks Orion."""
+    name = content.get("time_zone") if isinstance(content, dict) else None
+    if isinstance(name, str) and name:
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 - unknown or malformed name
+            pass
+    return ZoneInfo("UTC")
+
+
 @router.get("/latest")
 def latest(lang: str | None = None, auth: AuthContext = Depends(require_roles("TenantAdmin", "TechnicalConsultant"))):
     tenant_id = auth.tenant_id
     row = store.get_report(tenant_id)
-    if not row or row.get("status") in ("no_sources", "missed"):
+    content = (row or {}).get("content")
+    # A missed week keeps the content it had; only "no_sources" or an empty/unreadable report is a 404.
+    if not row or row.get("status") == "no_sources" or not isinstance(content, dict) or not content:
+        raise HTTPException(status_code=404, detail="No report this week")
+    local = _now().astimezone(_stored_zone(content))
+    current = schedule.iso_week(local.date() - timedelta(days=local.weekday()))
+    if row.get("iso_week") != current or content.get("iso_week") != current or content.get("status") == "no_sources":
         raise HTTPException(status_code=404, detail="No report this week")
     try:
-        zone = schedule.pick_timezone(sources.parcel_timezones(tenant_id), get_settings().weekly_report_default_tz)
-    except Exception as exc:  # noqa: BLE001 - zone unreadable: compare against UTC rather than fail
-        logger.warning("weekly_report tenant=%s latest: timezone unavailable (%s), using UTC",
-                       tenant_id, type(exc).__name__)
-        zone = timezone.utc
-    local = _now().astimezone(zone)
-    current = schedule.iso_week(local.date() - timedelta(days=local.weekday()))
-    content = row.get("content")
-    if row.get("iso_week") != current or not isinstance(content, dict) or content.get("iso_week") != current \
-            or content.get("status") == "no_sources":
+        plain = render.plain(content, _lang(lang))
+        week_start = row["week_start"].isoformat()
+    except Exception as exc:  # noqa: BLE001 - malformed stored content: no card rather than a 500
+        logger.warning("weekly_report tenant=%s latest: unreadable content (%s)", tenant_id, type(exc).__name__)
         raise HTTPException(status_code=404, detail="No report this week")
     generated = row.get("generated_at")
     return {
         "reportId": row["iso_week"],
-        "weekStart": row["week_start"].isoformat(),
+        "weekStart": week_start,
         "status": content.get("status") or row.get("status"),
         "generatedAt": generated.isoformat() if generated else None,
-        "plain": render.plain(content, _lang(lang)),
+        "plain": plain,
     }
 
 

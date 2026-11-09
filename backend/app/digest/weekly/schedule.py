@@ -123,8 +123,10 @@ def _zone(tenant_id: str) -> ZoneInfo:
     return pick_timezone(sources.parcel_timezones(tenant_id), get_settings().weekly_report_default_tz)
 
 
-def _build(tenant_id: str, week_start: date, wk: str) -> dict:
-    return compose.build(sources.gather(tenant_id, week_start), week_start, wk)
+def _build(tenant_id: str, week_start: date, wk: str, zone: ZoneInfo) -> dict:
+    report = compose.build(sources.gather(tenant_id, week_start), week_start, wk)
+    report["time_zone"] = zone.key  # the card derives "this week" from it, without asking Orion
+    return report
 
 
 def run_tenant(tenant_id: str, *, now: datetime, dry_run: bool = False) -> dict:
@@ -138,7 +140,7 @@ def run_tenant(tenant_id: str, *, now: datetime, dry_run: bool = False) -> dict:
             zone = pick_timezone([], get_settings().weekly_report_default_tz)
         local = now.astimezone(zone)
         week_start = local.date() - timedelta(days=local.weekday())
-        report = _build(tenant_id, week_start, iso_week(week_start))
+        report = _build(tenant_id, week_start, iso_week(week_start), zone)
         return {"action": "DRY", "report": report}
 
     row = store.get_report(tenant_id)
@@ -169,7 +171,7 @@ def run_tenant(tenant_id: str, *, now: datetime, dry_run: bool = False) -> dict:
     if action is not Action.WAIT:
         return {"action": action.value, "week": wk}
 
-    report = _build(tenant_id, week_start, wk)
+    report = _build(tenant_id, week_start, wk, zone)
     build_status = report["status"]
     action = decide(local_now=local, status=status, delivered=delivered, build_status=build_status)
     out = {"action": action.value, "week": wk, "status": build_status}
@@ -199,7 +201,7 @@ def run_manual(tenant_id: str, *, now: datetime, only_user_id: str, include_zuli
     local = now.astimezone(zone)
     week_start = local.date() - timedelta(days=local.weekday())
     wk = iso_week(week_start)
-    report = _build(tenant_id, week_start, wk)
+    report = _build(tenant_id, week_start, wk, zone)
     status = report["status"]
     if status in ("no_sources", "all_failed"):
         _log(tenant_id, wk, status, "MANUAL_SKIP")
@@ -242,5 +244,5 @@ async def run_weekly_scheduler() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.error("weekly_report pass failed: %s: %s", type(exc).__name__, exc)
+            logger.error("weekly_report pass failed: %s", type(exc).__name__)
         await asyncio.sleep(INTERVAL_S)

@@ -348,3 +348,31 @@ def test_scheduler_survives_exceptions(monkeypatch, world):
 
     asyncio.run(go())
     assert n["c"] >= 2
+
+
+def test_saved_report_carries_time_zone(world):
+    schedule.run_tenant(T, now=MON_UTC)
+    assert world.saved[0][4]["time_zone"] == "Europe/Madrid"
+
+
+def test_scheduler_logs_only_exception_type(monkeypatch, world, caplog):
+    import asyncio
+    import logging
+
+    def boom(now):
+        raise RuntimeError("secret-detail user@example.org")
+
+    monkeypatch.setattr(schedule, "run_once", boom)
+    monkeypatch.setattr(schedule, "INTERVAL_S", 0)
+
+    async def go():
+        task = asyncio.create_task(schedule.run_weekly_scheduler())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(go())
+    assert "RuntimeError" in caplog.text
+    assert "secret-detail" not in caplog.text and "user@example.org" not in caplog.text
