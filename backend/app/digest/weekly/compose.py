@@ -77,10 +77,12 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
     seen: set = set()
     ranked = []
     changes, figures = [], []
+    unknown = 0
     for s in sources:
         c = s.contribution
         if c is None:
             continue
+        unknown += max(0, c.unknown_count)
         for i, task in enumerate(c.tasks):
             if task.id:  # an empty id identifies nothing: never collapse such tasks
                 if (s.key, task.id) in seen:
@@ -153,4 +155,5 @@ def build(gathered, week_start: date, iso_week: str) -> dict:
         "extra_alerts": extra,
         "figures": figures,
         "unchanged": unchanged,
+        "unknown_count": unknown,
     }

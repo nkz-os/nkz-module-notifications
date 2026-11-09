@@ -22,9 +22,12 @@ def task(tid, when=None, subj=None, related=None, title="Regar", why="Suelo seco
     }
 
 
-def contrib(tasks=(), changes=(), figures=(), complete=True):
-    return Contribution.parse({"version": 1, "complete": complete, "tasks": list(tasks),
-                               "changes": list(changes), "figures": list(figures)})
+def contrib(tasks=(), changes=(), figures=(), complete=True, unknown_count=None):
+    raw = {"version": 1, "complete": complete, "tasks": list(tasks),
+           "changes": list(changes), "figures": list(figures)}
+    if unknown_count is not None:
+        raw["unknown_count"] = unknown_count
+    return Contribution.parse(raw)
 
 
 def src(key="mod-a", ok=True, c=None, label=None):
@@ -158,3 +161,12 @@ def test_alerts_without_id_not_dropped():
 def test_tasks_with_empty_id_not_collapsed():
     r = build(gathered([src(c=contrib([task("", title="Uno"), task("", title="Dos")]))]), WS, "w")
     assert [t["text"]["es"]["title"] for t in r["tasks"]] == ["Uno", "Dos"]
+
+
+def test_unknown_count_is_summed_and_defaults_to_zero():
+    r = build(gathered([src("a", c=contrib([task("1")], unknown_count=2)),
+                        src("b", c=contrib([task("2")], unknown_count=1)),
+                        src("c", c=contrib([task("3")]))]), WS, "w")
+    assert r["unknown_count"] == 3
+    assert build(gathered([src(c=contrib([task("1")]))]), WS, "w")["unknown_count"] == 0
+    assert Contribution.parse({"version": 1, "complete": True}).unknown_count == 0

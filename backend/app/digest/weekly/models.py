@@ -59,6 +59,7 @@ class Figure(_Base):
 class Contribution(_Base):
     version: int
     complete: bool
+    unknown_count: int = 0  # active-crop parcels with no recent assessment; absent means 0
     tasks: list[Task] = []
     changes: list[Change] = []
     figures: list[Figure] = []

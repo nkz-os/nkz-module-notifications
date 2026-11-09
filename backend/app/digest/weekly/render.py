@@ -10,6 +10,7 @@ from .texts import norm_lang, pick_text, t
 _GROUP_KEYS = (("now", "grp_now"), ("week", "grp_week"), ("next", "grp_next"), ("undated", "grp_undated"))
 _FIG_KEYS = (("rain_mm", "fig_rain"), ("et0_mm", "fig_et0"), ("gdd", "fig_gdd"))
 _PLAIN_MAX = 3
+_PARCEL_URN = "urn:ngsi-ld:AgriParcel:"
 
 
 def _line(s) -> str:
@@ -25,6 +26,10 @@ def subject(report: dict, lang: str) -> str:
     farm = _line(report.get("farm"))
     sfx = "" if farm else "_nofarm"
     n_alerts = len(report["alerts"]) + report["extra_alerts"]
+    unknown = report.get("unknown_count") or 0
+    if report["status"] == "complete" and not n and not n_alerts and unknown:
+        count = t(lang, "unk_count_one") if unknown == 1 else t(lang, "unk_count_many", n=unknown)
+        return _line(t(lang, "subj_unknown" + sfx, count=count, farm=farm))
     if report["status"] == "complete" and n:
         key = "subj_tasks" + sfx
     elif report["status"] == "complete" and n_alerts:
@@ -35,6 +40,13 @@ def subject(report: dict, lang: str) -> str:
     else:  # never "nothing urgent" unless every source answered completely
         key = ("subj_partial" if n else "subj_partial_none") + sfx
     return _line(t(lang, key, count=_count(lang, n), farm=farm))
+
+
+def _unknown_line(report, lang):
+    n = report.get("unknown_count") or 0
+    if not n:
+        return ""
+    return t(lang, "unknown_one") if n == 1 else t(lang, "unknown_many", n=n)
 
 
 def _warn(report, lang):
@@ -53,7 +65,9 @@ def _url(app_url, subj, link):
         return None
     if not isinstance(app_url, str) or not re.match(r"^https?://", app_url):
         return None
-    return f"{app_url.rstrip('/')}/crop-health?parcel={quote(subj['id'], safe='')}"
+    # crop-health expects the short id, not the URN.
+    short = subj["id"][len(_PARCEL_URN):] if subj["id"].startswith(_PARCEL_URN) else subj["id"]
+    return f"{app_url.rstrip('/')}/crop-health?parcel={quote(short, safe='')}"
 
 
 def _finite(v):
@@ -133,14 +147,17 @@ def _blocks(report, lang, app_url):
                 b.append(("item", _line(x["subject"]["name"]), title, why, _url(app_url, x["subject"], x["link"]),
                           _when(x, ws, lang)))
     rest = report["unchanged"] if report["status"] == "complete" else 0  # never reassure on partial data
-    if report["changes"] or rest:
+    unknown_line = _unknown_line(report, lang)
+    if report["changes"] or rest or unknown_line:
         b.append(("section", t(lang, "sec_changes")))
         for c in report["changes"]:
             title = _line(pick_text(c["text"], lang, "title")) or t(lang, "no_text")
             b.append(("item", _line(c["subject"]["name"]), title, _line(pick_text(c["text"], lang, "why")),
                       _url(app_url, c["subject"], c["link"]), ""))
+        if unknown_line:
+            b.append(("note", unknown_line))
         if rest:
-            if report["changes"] or report["tasks"]:
+            if report["changes"] or report["tasks"] or unknown_line:
                 key = "rest_one" if rest == 1 else "rest_many"
             else:
                 key = "all_one" if rest == 1 else "all_many"
@@ -149,11 +166,9 @@ def _blocks(report, lang, app_url):
         b.append(("section", t(lang, "sec_alerts")))
         for a in report["alerts"]:
             if a["weather"]:
-                desc = a.get("description") if lang == "es" else ""
+                # The provider's headline is in its own language: always the generic text.
                 sev = a.get("severity")
-                if desc:
-                    text = desc + t(lang, "forecast_suffix")
-                elif sev in ("severe", "moderate"):
+                if sev in ("critical", "severe", "moderate"):
                     text = t(lang, "weather_sev", sev=t(lang, "sev_" + sev))
                 else:
                     text = t(lang, "weather_generic")
@@ -303,10 +318,12 @@ def plain(report: dict, lang: str) -> dict:
     lines = []
     for x in tasks[:_PLAIN_MAX]:
         title = _line(pick_text(x["text"], lang, "title")) or t(lang, "no_text")
-        lines.append(_head(_line(x["subject"]["name"]), title,
-                           _when(x, date.fromisoformat(report["week_start"]), lang)))
+        when = _when(x, date.fromisoformat(report["week_start"]), lang)
+        if when == t(lang, "when_today"):
+            when = ""  # the card and the push live all week: "today" would be false on Thursday
+        lines.append(_head(_line(x["subject"]["name"]), title, when))
     if len(tasks) > _PLAIN_MAX:
         lines.append(t(lang, "more", n=len(tasks) - _PLAIN_MAX))
     if not tasks:
-        lines.append(_warn(report, lang) or t(lang, "plain_empty"))
+        lines += [x for x in (_warn(report, lang), _unknown_line(report, lang)) if x] or [t(lang, "plain_empty")]
     return {"title": subject(report, lang), "body": "\n".join(lines)}

@@ -24,7 +24,7 @@ MODULE_TIMEOUT_S = 60
 _PAGE = 100
 _MAX_PAGES = 50
 _WEATHER_CAP = 5
-_WEATHER_SEVERITY_RANK = {"severe": 0, "moderate": 1}
+_WEATHER_SEVERITY_RANK = {"critical": 0, "severe": 1, "moderate": 2}
 # WeatherAlert entities are geographic and live in the cross-tenant scope (same env as weather-api).
 _SHARED_TENANT = os.getenv("SHARED_GEO_TENANT", "shared")
 _CLUSTER_HOST = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", re.IGNORECASE)
@@ -211,7 +211,7 @@ def _geo_query_all(orion, lon: float, lat: float, q: str) -> list[dict]:
 
 
 def _fetch_weather_alerts(tenant_id: str, now: datetime | None = None) -> tuple[list[dict], bool]:
-    """Severe/moderate WeatherAlerts that intersect this tenant's parcels (max 5, severe first)."""
+    """Critical, severe and moderate WeatherAlerts that intersect this tenant's parcels (max 5, most severe first)."""
     now = now or datetime.now(timezone.utc)
     now_iso = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     q = f'validTo>"{now_iso}"'

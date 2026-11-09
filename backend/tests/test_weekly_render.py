@@ -93,7 +93,8 @@ def test_alert_without_plain_counted_not_printed():
 def test_weather_alert_copy():
     w = [{"id": "w", "severity": "severe", "description": "Riesgo de helada el martes", "parcel_names": []}]
     r = rep([task("1")], weather=w)
-    assert "Riesgo de helada el martes (previsión)" in render.email(r, "es", PREFS, APP)["text"]
+    es = render.email(r, "es", PREFS, APP)["text"]
+    assert "Aviso meteorológico grave (previsión)" in es and "helada" not in es
     en = render.email(r, "en", PREFS, APP)["text"]
     assert "Severe weather alert (forecast)" in en and "helada" not in en
 
@@ -170,7 +171,8 @@ def test_each_line_standalone():
 def test_links():
     r = rep([task("1")])
     text = render.email(r, "es", PREFS, APP)["text"]
-    assert f"{APP}/crop-health?parcel=urn%3Angsi-ld%3AAgriParcel%3Ap1" in text
+    assert f"{APP}/crop-health?parcel=p1" in text
+    assert "urn" not in text.split("crop-health?parcel=")[1].split()[0]
     assert "/viewer?" not in text
     for app in (None, "", "javascript:alert(1)"):
         e = render.email(r, "es", PREFS, app)
@@ -183,7 +185,7 @@ def test_plain_summary_cap():
     p = render.plain(r, "es")
     assert p["title"] == render.subject(r, "es")
     lines = p["body"].splitlines()
-    assert len(lines) == 4 and lines[-1] == "y 2 más" and lines[0] == "Olivar Norte: Tarea 0 — hoy"
+    assert len(lines) == 4 and lines[-1] == "y 2 más" and lines[0] == "Olivar Norte: Tarea 0"
     assert len(render.plain(rep([task("1")]), "es")["body"].splitlines()) == 1
 
 
@@ -285,8 +287,9 @@ def test_each_line_carries_when(when, es, en, eu):
         item = [ln for ln in e["text"].splitlines() if ln.startswith("• ")][0]
         assert want in item
         assert want in html_unescape(e["content_html"]) and want in render.zulip(r, lang, APP)
-    assert want in render.plain(r, "eu")["body"]
-    assert es in render.plain(r, "es")["body"]
+    if when["type"] != "today":  # the card and push live all week: no "today" phrase
+        assert want in render.plain(r, "eu")["body"]
+        assert es in render.plain(r, "es")["body"]
 
 
 def html_unescape(s):
@@ -341,3 +344,86 @@ def test_weather_alert_names_parcels_capped():
     assert "(previsión): A, B, C y 2 más" in text
     en = render.email(rep([task("1")], weather=w), "en", PREFS, APP)["text"]
     assert "A, B, C and 2 more" in en
+
+
+# ---- F: critical weather ----
+
+CRITICAL = {"id": "w9", "severity": "critical", "description": "", "parcel_names": ["Olivar Norte"]}
+
+
+@pytest.mark.parametrize("lang,phrase", [("es", "Aviso meteorológico muy grave (previsión): Olivar Norte"),
+                                         ("en", "Critical weather alert (forecast): Olivar Norte"),
+                                         ("eu", "oso larria")])
+def test_critical_weather_has_its_own_word(lang, phrase):
+    r = rep([], weather=[CRITICAL])
+    text = render.email(r, lang, PREFS, APP)["text"]
+    assert phrase in text
+    assert "critical" not in text.replace("Critical", "")
+    none_texts = {"es": "nada urgente", "en": "nothing urgent", "eu": "ez dago ezer premiazkorik"}
+    assert none_texts[lang] not in render.subject(r, lang).lower()
+
+
+# ---- G: unknown_count ----
+
+def rep_unknown(n, tasks=(), **kw):
+    return rep(tasks, srcs=[src(c=contrib(tasks, unknown_count=n))], **kw)
+
+
+@pytest.mark.parametrize("n,name,es,en,eu", [
+    (3, "Finca Acme", "Sin evaluación reciente en 3 parcelas de Finca Acme",
+     "No recent assessment for 3 parcels at Finca Acme", "ebaluazio berririk"),
+    (1, "Finca Acme", "Sin evaluación reciente en 1 parcela de Finca Acme",
+     "No recent assessment for 1 parcel at Finca Acme", "ebaluazio berririk"),
+    (2, "", "Sin evaluación reciente en 2 parcelas", "No recent assessment for 2 parcels", "ebaluazio berririk"),
+])
+def test_unknown_only_subject_is_not_nothing_urgent(n, name, es, en, eu):
+    r = rep_unknown(n, name=name)
+    assert r["status"] == "complete" and r["tasks"] == [] and r["alerts"] == []
+    assert render.subject(r, "es") == es
+    assert render.subject(r, "en") == en
+    assert eu in render.subject(r, "eu").lower()
+    for lang in LANGS:
+        e = render.email(r, lang, PREFS, APP)
+        blob = (e["subject"] + e["text"] + render.zulip(r, lang) + str(render.plain(r, lang))).lower()
+        for none in ("nada urgente", "nothing urgent", "ez dago ezer premiazkorik"):
+            assert none not in blob
+        assert "{" not in e["subject"] + e["text"]
+        assert str(n) in render.plain(r, lang)["body"]
+        assert str(n) in e["text"] and str(n) in render.zulip(r, lang)
+
+
+def test_unknown_line_with_tasks_keeps_subject_and_sits_with_changes():
+    r = rep_unknown(2, tasks=[task("1")])
+    assert render.subject(r, "es") == "Esta semana: 1 tarea en Finca Acme"
+    text = render.email(r, "es", PREFS, APP)["text"]
+    assert "2 parcelas sin evaluación reciente" in text
+    assert text.index("QUÉ HA CAMBIADO") < text.index("2 parcelas sin evaluación reciente")
+    assert "1 parcela sin evaluación reciente" in render.email(rep_unknown(1, tasks=[task("1")]), "es", PREFS, APP)["text"]
+    assert "2 parcels with no recent assessment" in render.email(r, "en", PREFS, APP)["text"]
+    assert "ebaluazio berririk" in render.email(r, "eu", PREFS, APP)["text"]
+
+
+def test_unknown_zero_changes_nothing():
+    r = rep([task("1")])
+    assert r["unknown_count"] == 0
+    assert "sin evaluación" not in render.email(r, "es", PREFS, APP)["text"]
+    assert render.subject(rep([]), "es") == "Esta semana no hay nada urgente en Finca Acme"
+
+
+def test_unknown_with_alerts_keeps_alert_subject_but_shows_line():
+    r = rep_unknown(2, alerts=[ALERT_PLAIN])
+    assert render.subject(r, "es") == "Esta semana: 1 aviso en Finca Acme"
+    assert "2 parcelas sin evaluación reciente" in render.email(r, "es", PREFS, APP)["text"]
+
+
+# ---- I: plain never says "today" ----
+
+@pytest.mark.parametrize("lang,today", [("es", "hoy"), ("en", "today"), ("eu", "gaur")])
+def test_plain_has_no_today_phrase_but_keeps_dates(lang, today):
+    r = rep([task("1", {"type": "today", "date": None}), task("2", d(-3)), task("3", d(3))])
+    body = render.plain(r, lang)["body"]
+    assert f"— {today}" not in body
+    assert "06/11" in body and "12/11" in body
+    assert "—" in body
+    # email keeps it
+    assert f"— {today}" in render.email(r, lang, PREFS, APP)["text"]

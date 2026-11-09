@@ -103,7 +103,7 @@ def test_not_installed_not_called(monkeypatch):
 
 @pytest.mark.parametrize("url", [
     "https://crop-health.example.org/internal/weekly-report",
-    "http://10.0.0.1:8000/x",
+    "http://mod-b-api-service.example.org:8000/x",
     "ftp://mod-a/x",
 ])
 def test_url_must_be_in_cluster(monkeypatch, url):
@@ -377,3 +377,15 @@ def test_parcel_timezones_raises_on_orion_failure(orion):
     orion.fail = {"AgriParcel"}
     with pytest.raises(RuntimeError):
         sources.parcel_timezones(T)
+
+
+def test_weather_critical_kept_ranked_first_cap_5(orion):
+    orion.data["AgriParcel"] = [_parcel(1, -1.5, 42.5)]
+    orion.geo[(-1.5, 42.5)] = (
+        [_w(i, "moderate") for i in range(3)]
+        + [_w(10 + i, "severe") for i in range(3)]
+        + [_w(30, "critical")]
+    )
+    out, ok = sources._fetch_weather_alerts(T, now=NOW)
+    assert ok and len(out) == 5
+    assert [a["severity"] for a in out] == ["critical", "severe", "severe", "severe", "moderate"]
