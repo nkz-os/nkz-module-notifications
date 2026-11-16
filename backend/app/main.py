@@ -18,8 +18,12 @@ from app.api import router as api_router
 from app.api.internal import router as internal_router
 from app.api.weekly import internal_router as weekly_internal_router
 from app.api.public import router as public_router
+from app.log_redact import install_access_log_redaction
 
 logger = logging.getLogger(__name__)
+
+# uvicorn configures its loggers before importing the app, so the filter survives.
+install_access_log_redaction()
 
 
 @asynccontextmanager
